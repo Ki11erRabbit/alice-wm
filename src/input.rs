@@ -1,10 +1,9 @@
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
-        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent
     },
     input::{
-        keyboard::FilterResult,
+        keyboard::{FilterResult, Keysym},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -19,6 +18,7 @@ impl Alice {
             InputEvent::Keyboard { event, .. } => {
                 let serial = SERIAL_COUNTER.next_serial();
                 let time = Event::time_msec(&event);
+                let key_state = event.state();
 
                 self.seat.get_keyboard().unwrap().input::<(), _>(
                     self,
@@ -26,7 +26,15 @@ impl Alice {
                     event.state(),
                     serial,
                     time,
-                    |_, _, _| FilterResult::Forward,
+                    |state, modifiers, keysym_handle| {
+                        let keysym = keysym_handle.modified_sym();
+
+                        if key_state == KeyState::Pressed && modifiers.alt && keysym == Keysym::Return {
+                            state.spawn("alacritty");
+                            return FilterResult::Intercept(());
+                        }
+                        FilterResult::Forward
+                    },
                 );
             }
             InputEvent::PointerMotion { .. } => {}

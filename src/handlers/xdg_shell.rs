@@ -34,7 +34,13 @@ impl XdgShellHandler for Alice {
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
         let window = Window::new_wayland_window(surface);
+
+        let id = self.next_window_id.next();
+        self.window_map.insert(id, window.clone());
+
         self.space.map_element(window, (0, 0), false);
+
+        self.relayout();
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {

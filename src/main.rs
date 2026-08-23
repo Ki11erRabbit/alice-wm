@@ -6,11 +6,12 @@ mod grabs;
 mod input;
 mod state;
 mod winit;
+mod layout;
 
-use smithay::reexports::{
+use smithay::{output::{Mode, Output, PhysicalProperties, Scale, Subpixel}, reexports::{
     calloop::EventLoop,
     wayland_server::{Display, DisplayHandle},
-};
+}, utils::Transform};
 pub use state::Alice;
 
 pub struct CalloopData {
@@ -29,7 +30,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let display: Display<Alice> = Display::new()?;
     let display_handle = display.handle();
-    let state = Alice::new(&mut event_loop, display);
+    let mut state = Alice::new(&mut event_loop, display);
+    let output = Output::new(
+        "output-0".into(),
+        PhysicalProperties {
+            size: (1920, 1080).into(),
+            subpixel: Subpixel::HorizontalRgb,
+            make: "Screens Inc".into(),
+            model: "Monitor Ultra".into(),
+        },
+    );
+
+    output.change_current_state(
+        Some(Mode {
+             size: (1920, 1080).into(),
+             refresh: 60
+        }),
+        Some(Transform::Normal),
+        Some(Scale::Integer(1)),
+        Some((0, 0).into())
+    );
+    output.set_preferred(
+        Mode {
+             size: (1920, 1080).into(),
+             refresh: 60
+        }
+    );
+    state.space.map_output(&output, (0, 0));
+    state.outputs.insert("output-0".into(), output);
 
     let mut data = CalloopData {
         state,
@@ -37,6 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     crate::winit::init_winit(&mut event_loop, &mut data)?;
+
 
     let mut args = std::env::args().skip(1);
     let flag = args.next();

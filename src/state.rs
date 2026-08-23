@@ -1,28 +1,22 @@
-use std::{ffi::OsString, sync::Arc};
+use std::{collections::HashMap, ffi::OsString, sync::Arc};
 
 use smithay::{
-    desktop::{PopupManager, Space, Window, WindowSurfaceType},
-    input::{Seat, SeatState},
-    reexports::{
-        calloop::{generic::Generic, EventLoop, Interest, LoopSignal, Mode, PostAction},
+    desktop::{PopupManager, Space, Window, WindowSurfaceType}, input::{Seat, SeatState}, output::Output, reexports::{
+        calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic},
         wayland_server::{
-            backend::{ClientData, ClientId, DisconnectReason},
-            protocol::wl_surface::WlSurface,
-            Display, DisplayHandle,
+            Display, DisplayHandle, backend::{ClientData, ClientId, DisconnectReason}, protocol::wl_surface::WlSurface
         },
-    },
-    utils::{Logical, Point},
-    wayland::{
+    }, utils::{Logical, Point}, wayland::{
         compositor::{CompositorClientState, CompositorState},
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
         shell::xdg::XdgShellState,
         shm::ShmState,
         socket::ListeningSocketSource,
-    },
+    }
 };
 
-use crate::CalloopData;
+use crate::{CalloopData, layout::{Layout, MasterStack, Rect, WindowId}};
 
 pub struct Alice {
     pub start_time: std::time::Instant,
@@ -31,6 +25,11 @@ pub struct Alice {
 
     pub space: Space<Window>,
     pub loop_signal: LoopSignal,
+
+    pub window_positions: Vec<Rect>,
+    pub window_map: HashMap<WindowId, Window>,
+    pub next_window_id: WindowId,
+    pub outputs: HashMap<String, Output>,
 
     // Smithay State
     pub compositor_state: CompositorState,
@@ -88,6 +87,11 @@ impl Alice {
             space,
             loop_signal,
             socket_name,
+
+            window_positions: Vec::new(),
+            window_map: HashMap::new(),
+            next_window_id: WindowId(0),
+            outputs: HashMap::new(),
 
             compositor_state,
             xdg_shell_state,
@@ -148,6 +152,56 @@ impl Alice {
                 .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
                 .map(|(s, p)| (s, (p + location).to_f64()))
         })
+    }
+
+    pub fn relayout(&mut self) {
+        let outputs = self.outputs.values()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for output in outputs {
+            let geometry = self.space.output_geometry(&output).unwrap();
+            let area = Rect {
+                x: geometry.loc.x,
+                y: geometry.loc.y,
+                width: geometry.size.w,
+                height: geometry.size.h,
+            };
+
+            let mut windows = self.window_map.keys()
+                .map(|id| *id)
+                .collect::<Vec<_>>();
+            windows.sort_by(|a, b| {
+                a.0.cmp(&b.0)
+            });
+
+            let layout = MasterStack;
+            let rects = MasterStack.arrange(area, &windows);
+
+            for (id, rect) in windows.iter().zip(rects) {
+                self.apply_rects(*id, rect);
+            }
+
+        }
+    }
+
+    fn apply_rects(&mut self, id: WindowId, rect: Rect) {
+        let window = self.window_map.get(&id).unwrap();
+        window.toplevel().unwrap().with_pending_state(|state| {
+            state.size = Some((rect.width, rect.height).into());
+        });
+        window.toplevel().unwrap().send_configure();
+        self.space.map_element(window.clone(), (rect.x, rect.y), false);
+    }
+
+    pub fn spawn(&self, command: &str) {
+        let socket_name = self.socket_name.clone();
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .env("WAYLAND_DISPLAY", socket_name)
+            .spawn()
+            .ok();
     }
 }
 
