@@ -1,4 +1,4 @@
-use crate::{grabs::resize_grab, state::ClientState, Smallvil};
+use crate::{grabs::resize_grab, state::ClientState, Alice};
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_shm,
@@ -17,7 +17,7 @@ use smithay::{
 
 use super::xdg_shell;
 
-impl CompositorHandler for Smallvil {
+impl CompositorHandler for Alice {
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self.compositor_state
     }
@@ -47,15 +47,15 @@ impl CompositorHandler for Smallvil {
     }
 }
 
-impl BufferHandler for Smallvil {
+impl BufferHandler for Alice {
     fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
 }
 
-impl ShmHandler for Smallvil {
+impl ShmHandler for Alice {
     fn shm_state(&self) -> &ShmState {
         &self.shm_state
     }
 }
 
-delegate_compositor!(Smallvil);
-delegate_shm!(Smallvil);
+delegate_compositor!(Alice);
+delegate_shm!(Alice);

@@ -1,4 +1,4 @@
-use crate::Smallvil;
+use crate::Alice;
 use smithay::{
     desktop::Window,
     input::pointer::{
@@ -12,16 +12,16 @@ use smithay::{
 };
 
 pub struct MoveSurfaceGrab {
-    pub start_data: PointerGrabStartData<Smallvil>,
+    pub start_data: PointerGrabStartData<Alice>,
     pub window: Window,
     pub initial_window_location: Point<i32, Logical>,
 }
 
-impl PointerGrab<Smallvil> for MoveSurfaceGrab {
+impl PointerGrab<Alice> for MoveSurfaceGrab {
     fn motion(
         &mut self,
-        data: &mut Smallvil,
-        handle: &mut PointerInnerHandle<'_, Smallvil>,
+        data: &mut Alice,
+        handle: &mut PointerInnerHandle<'_, Alice>,
         _focus: Option<(WlSurface, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
@@ -36,8 +36,8 @@ impl PointerGrab<Smallvil> for MoveSurfaceGrab {
 
     fn relative_motion(
         &mut self,
-        data: &mut Smallvil,
-        handle: &mut PointerInnerHandle<'_, Smallvil>,
+        data: &mut Alice,
+        handle: &mut PointerInnerHandle<'_, Alice>,
         focus: Option<(WlSurface, Point<f64, Logical>)>,
         event: &RelativeMotionEvent,
     ) {
@@ -46,8 +46,8 @@ impl PointerGrab<Smallvil> for MoveSurfaceGrab {
 
     fn button(
         &mut self,
-        data: &mut Smallvil,
-        handle: &mut PointerInnerHandle<'_, Smallvil>,
+        data: &mut Alice,
+        handle: &mut PointerInnerHandle<'_, Alice>,
         event: &ButtonEvent,
     ) {
         handle.button(data, event);
@@ -64,21 +64,21 @@ impl PointerGrab<Smallvil> for MoveSurfaceGrab {
 
     fn axis(
         &mut self,
-        data: &mut Smallvil,
-        handle: &mut PointerInnerHandle<'_, Smallvil>,
+        data: &mut Alice,
+        handle: &mut PointerInnerHandle<'_, Alice>,
         details: AxisFrame,
     ) {
         handle.axis(data, details)
     }
 
-    fn frame(&mut self, data: &mut Smallvil, handle: &mut PointerInnerHandle<'_, Smallvil>) {
+    fn frame(&mut self, data: &mut Alice, handle: &mut PointerInnerHandle<'_, Alice>) {
         handle.frame(data);
     }
 
     fn gesture_swipe_begin(
         &mut self,
-        data: &mut Smallvil,
-        handle: &mut PointerInnerHandle<'_, Smallvil>,
+        data: &mut Alice,
+        handle: &mut PointerInnerHandle<'_, Alice>,
         event: &GestureSwipeBeginEvent,
     ) {
         handle.gesture_swipe_begin(data, event)
@@ -86,8 +86,8 @@ impl PointerGrab<Smallvil> for MoveSurfaceGrab {
 
     fn gesture_swipe_update(
         &mut self,
-        data: &mut Smallvil,
-        handle: &mut PointerInnerHandle<'_, Smallvil>,
+        data: &mut Alice,
+        handle: &mut PointerInnerHandle<'_, Alice>,
         event: &GestureSwipeUpdateEvent,
     ) {
         handle.gesture_swipe_update(data, event)
@@ -95,8 +95,8 @@ impl PointerGrab<Smallvil> for MoveSurfaceGrab {
 
     fn gesture_swipe_end(
         &mut self,
-        data: &mut Smallvil,
-        handle: &mut PointerInnerHandle<'_, Smallvil>,
+        data: &mut Alice,
+        handle: &mut PointerInnerHandle<'_, Alice>,
         event: &GestureSwipeEndEvent,
     ) {
         handle.gesture_swipe_end(data, event)
@@ -104,8 +104,8 @@ impl PointerGrab<Smallvil> for MoveSurfaceGrab {
 
     fn gesture_pinch_begin(
         &mut self,
-        data: &mut Smallvil,
-        handle: &mut PointerInnerHandle<'_, Smallvil>,
+        data: &mut Alice,
+        handle: &mut PointerInnerHandle<'_, Alice>,
         event: &GesturePinchBeginEvent,
     ) {
         handle.gesture_pinch_begin(data, event)
@@ -113,8 +113,8 @@ impl PointerGrab<Smallvil> for MoveSurfaceGrab {
 
     fn gesture_pinch_update(
         &mut self,
-        data: &mut Smallvil,
-        handle: &mut PointerInnerHandle<'_, Smallvil>,
+        data: &mut Alice,
+        handle: &mut PointerInnerHandle<'_, Alice>,
         event: &GesturePinchUpdateEvent,
     ) {
         handle.gesture_pinch_update(data, event)
@@ -122,8 +122,8 @@ impl PointerGrab<Smallvil> for MoveSurfaceGrab {
 
     fn gesture_pinch_end(
         &mut self,
-        data: &mut Smallvil,
-        handle: &mut PointerInnerHandle<'_, Smallvil>,
+        data: &mut Alice,
+        handle: &mut PointerInnerHandle<'_, Alice>,
         event: &GesturePinchEndEvent,
     ) {
         handle.gesture_pinch_end(data, event)
@@ -131,8 +131,8 @@ impl PointerGrab<Smallvil> for MoveSurfaceGrab {
 
     fn gesture_hold_begin(
         &mut self,
-        data: &mut Smallvil,
-        handle: &mut PointerInnerHandle<'_, Smallvil>,
+        data: &mut Alice,
+        handle: &mut PointerInnerHandle<'_, Alice>,
         event: &GestureHoldBeginEvent,
     ) {
         handle.gesture_hold_begin(data, event)
@@ -140,16 +140,16 @@ impl PointerGrab<Smallvil> for MoveSurfaceGrab {
 
     fn gesture_hold_end(
         &mut self,
-        data: &mut Smallvil,
-        handle: &mut PointerInnerHandle<'_, Smallvil>,
+        data: &mut Alice,
+        handle: &mut PointerInnerHandle<'_, Alice>,
         event: &GestureHoldEndEvent,
     ) {
         handle.gesture_hold_end(data, event)
     }
 
-    fn start_data(&self) -> &PointerGrabStartData<Smallvil> {
+    fn start_data(&self) -> &PointerGrabStartData<Alice> {
         &self.start_data
     }
 
-    fn unset(&mut self, _data: &mut Smallvil) {}
+    fn unset(&mut self, _data: &mut Alice) {}
 }

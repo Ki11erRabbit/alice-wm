@@ -24,7 +24,7 @@ use smithay::{
 
 use crate::CalloopData;
 
-pub struct Smallvil {
+pub struct Alice {
     pub start_time: std::time::Instant,
     pub socket_name: OsString,
     pub display_handle: DisplayHandle,
@@ -37,14 +37,14 @@ pub struct Smallvil {
     pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
     pub output_manager_state: OutputManagerState,
-    pub seat_state: SeatState<Smallvil>,
+    pub seat_state: SeatState<Alice>,
     pub data_device_state: DataDeviceState,
     pub popups: PopupManager,
 
     pub seat: Seat<Self>,
 }
 
-impl Smallvil {
+impl Alice {
     pub fn new(event_loop: &mut EventLoop<CalloopData>, display: Display<Self>) -> Self {
         let start_time = std::time::Instant::now();
 
@@ -101,7 +101,7 @@ impl Smallvil {
     }
 
     fn init_wayland_listener(
-        display: Display<Smallvil>,
+        display: Display<Alice>,
         event_loop: &mut EventLoop<CalloopData>,
     ) -> OsString {
         // Creates a new listening socket, automatically choosing the next available `wayland` socket name.
