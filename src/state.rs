@@ -153,13 +153,11 @@ impl Alice {
     }
 
     pub fn relayout(&mut self) {
-        println!("relayout");
         let outputs = self.outputs.iter()
             .cloned()
             .collect::<Vec<_>>();
 
         for output in outputs {
-            println!("output {}", output.output.name());
             let geometry = self.space.output_geometry(&output.output).unwrap();
             let area = Rect {
                 x: geometry.loc.x,
@@ -175,13 +173,10 @@ impl Alice {
             let mut windows = self.window_registry.filter(&scope)
                 .collect::<Vec<_>>();
 
-            windows.sort();
-
             let layout = self.layout_registry.get_layout(&scope);
             let rects = layout.arrange(area, &windows);
 
             for (id, rect) in windows.iter().zip(rects) {
-                println!("\t{}", id.0);
                 self.apply_rects(*id, rect);
             }
 
@@ -198,7 +193,6 @@ impl Alice {
     }
 
     pub fn spawn(&self, command: &str) {
-        println!("spawning command");
         let socket_name = self.socket_name.clone();
         std::process::Command::new("sh")
             .arg("-c")

@@ -25,6 +25,9 @@ impl Layout for MasterStack {
     }
 
     fn arrange(&self, area: Rect, windows: &[WindowId]) -> Vec<Rect> {
+        if windows.is_empty() {
+            return Vec::new();
+        }
         if windows.len() == 1 {
             return vec![area];
         }

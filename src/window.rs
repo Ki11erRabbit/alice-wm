@@ -29,6 +29,9 @@ pub struct WindowRegistry {
     map: HashMap<WindowId, WindowInfo>,
     available_ids: Vec<WindowId>,
     next_window_id: WindowId,
+    order: HashMap<LayoutScope, Vec<WindowId>>,
+    /// This field is to satisfy the typechecker on WindowRegistry::filter
+    empty: Vec<WindowId>,
 }
 
 impl WindowRegistry {
@@ -37,6 +40,8 @@ impl WindowRegistry {
             map: HashMap::new(),
             available_ids: Vec::new(),
             next_window_id: WindowId(0),
+            order: HashMap::new(),
+            empty: Vec::new(),
         }
     }
 
@@ -46,24 +51,41 @@ impl WindowRegistry {
         } else {
             self.next_window_id.next()
         };
+        self.order.entry(LayoutScope {
+            output: info.output,
+            tag: info.tag,
+        })
+        .and_modify(|list| {
+            list.push(id);
+        })
+        .or_insert(vec![id]);
         self.map.insert(id, info);
         id
     }
 
     pub fn remove(&mut self, id: WindowId) {
         self.map.remove(&id);
+        for value in self.order.values_mut() {
+            let mut index = None;
+            for i in 0..value.len() {
+                if value[i] == id {
+                    index = Some(i);
+                    break;
+                }
+            }
+            if let Some(index) = index {
+                value.remove(index);
+                break;
+            }
+        }
         self.available_ids.push(id);
     }
 
     pub fn filter(&self, scope: &LayoutScope) -> impl Iterator<Item = WindowId> {
-        self.map.iter()
-            .filter_map(|(id, info)| {
-                if info.tag == scope.tag && info.output == scope.output {
-                    Some(*id)
-                } else {
-                    None
-                }
-            })
+        let Some(ordering) = self.order.get(scope) else {
+            return self.empty.iter().rev().cloned();
+        };
+        ordering.iter().rev().cloned()
     }
 
     pub fn find(&mut self, window: Window) -> Option<WindowId> {
