@@ -7,6 +7,8 @@ mod input;
 mod state;
 mod winit;
 mod layout;
+mod output;
+mod window;
 
 use smithay::{output::{Mode, Output, PhysicalProperties, Scale, Subpixel}, reexports::{
     calloop::EventLoop,
@@ -57,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     );
     state.space.map_output(&output, (0, 0));
-    state.outputs.insert("output-0".into(), output);
+    state.outputs.insert(output);
 
     let mut data = CalloopData {
         state,

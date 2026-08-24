@@ -16,7 +16,7 @@ use smithay::{
     }
 };
 
-use crate::{CalloopData, layout::{Layout, MasterStack, Rect, WindowId}};
+use crate::{CalloopData, layout::{Layout, MasterStack, Rect}, output::{LayoutRegistry, LayoutScope, Outputs}, window::{WindowId, WindowRegistry}};
 
 pub struct Alice {
     pub start_time: std::time::Instant,
@@ -26,10 +26,9 @@ pub struct Alice {
     pub space: Space<Window>,
     pub loop_signal: LoopSignal,
 
-    pub window_positions: Vec<Rect>,
-    pub window_map: HashMap<WindowId, Window>,
-    pub next_window_id: WindowId,
-    pub outputs: HashMap<String, Output>,
+    pub window_registry: WindowRegistry,
+    pub outputs: Outputs,
+    pub layout_registry: LayoutRegistry,
 
     // Smithay State
     pub compositor_state: CompositorState,
@@ -88,10 +87,9 @@ impl Alice {
             loop_signal,
             socket_name,
 
-            window_positions: Vec::new(),
-            window_map: HashMap::new(),
-            next_window_id: WindowId(0),
-            outputs: HashMap::new(),
+            window_registry: WindowRegistry::new(),
+            outputs: Outputs::new(),
+            layout_registry: LayoutRegistry::new(),
 
             compositor_state,
             xdg_shell_state,
@@ -155,12 +153,14 @@ impl Alice {
     }
 
     pub fn relayout(&mut self) {
-        let outputs = self.outputs.values()
+        println!("relayout");
+        let outputs = self.outputs.iter()
             .cloned()
             .collect::<Vec<_>>();
 
         for output in outputs {
-            let geometry = self.space.output_geometry(&output).unwrap();
+            println!("output {}", output.output.name());
+            let geometry = self.space.output_geometry(&output.output).unwrap();
             let area = Rect {
                 x: geometry.loc.x,
                 y: geometry.loc.y,
@@ -168,17 +168,20 @@ impl Alice {
                 height: geometry.size.h,
             };
 
-            let mut windows = self.window_map.keys()
-                .map(|id| *id)
+            let scope = LayoutScope {
+                output: output.id,
+                tag: output.current_tag,
+            };
+            let mut windows = self.window_registry.filter(&scope)
                 .collect::<Vec<_>>();
-            windows.sort_by(|a, b| {
-                a.0.cmp(&b.0)
-            });
 
-            let layout = MasterStack;
-            let rects = MasterStack.arrange(area, &windows);
+            windows.sort();
+
+            let layout = self.layout_registry.get_layout(&scope);
+            let rects = layout.arrange(area, &windows);
 
             for (id, rect) in windows.iter().zip(rects) {
+                println!("\t{}", id.0);
                 self.apply_rects(*id, rect);
             }
 
@@ -186,15 +189,16 @@ impl Alice {
     }
 
     fn apply_rects(&mut self, id: WindowId, rect: Rect) {
-        let window = self.window_map.get(&id).unwrap();
-        window.toplevel().unwrap().with_pending_state(|state| {
+        let window = self.window_registry.get(&id).unwrap();
+        window.window.toplevel().unwrap().with_pending_state(|state| {
             state.size = Some((rect.width, rect.height).into());
         });
-        window.toplevel().unwrap().send_configure();
-        self.space.map_element(window.clone(), (rect.x, rect.y), false);
+        window.window.toplevel().unwrap().send_configure();
+        self.space.map_element(window.window.clone(), (rect.x, rect.y), false);
     }
 
     pub fn spawn(&self, command: &str) {
+        println!("spawning command");
         let socket_name = self.socket_name.clone();
         std::process::Command::new("sh")
             .arg("-c")
@@ -202,6 +206,23 @@ impl Alice {
             .env("WAYLAND_DISPLAY", socket_name)
             .spawn()
             .ok();
+    }
+
+    pub fn remove_window(&mut self, surface: &WlSurface) {
+        let Some(window) = self.space.elements()
+            .find(|w| w.toplevel().map(|t| t.wl_surface()) == Some(surface))
+            .cloned() else {
+            return;
+        };
+
+        let Some(id) = self.window_registry.find(window.clone()) else {
+            return;
+        };
+
+        self.window_registry.remove(id);
+
+        self.space.unmap_elem(&window);
+
     }
 }
 

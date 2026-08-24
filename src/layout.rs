@@ -1,3 +1,6 @@
+use crate::window::WindowId;
+
+
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {
@@ -7,16 +10,6 @@ pub struct Rect {
     pub height: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WindowId(pub u64);
-
-impl WindowId {
-    pub fn next(&mut self) -> WindowId {
-        let out = *self;
-        self.0 += 1;
-        out
-    }
-}
 
 pub trait Layout {
     fn name(&self) -> &'static str;
@@ -67,3 +60,4 @@ impl Layout for MasterStack {
         out
     }
 }
+

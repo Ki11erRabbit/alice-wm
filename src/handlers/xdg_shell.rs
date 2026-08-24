@@ -23,8 +23,7 @@ use smithay::{
 };
 
 use crate::{
-    grabs::{MoveSurfaceGrab, ResizeSurfaceGrab},
-    Alice,
+    Alice, grabs::{MoveSurfaceGrab, ResizeSurfaceGrab}, window::WindowInfo
 };
 
 impl XdgShellHandler for Alice {
@@ -33,12 +32,35 @@ impl XdgShellHandler for Alice {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        let pointer_loc = self.seat.get_pointer().unwrap()
+            .current_location();
+
+        let Some(output) = self.space.output_under(pointer_loc).next() else {
+            println!("no cursor");
+            return;
+        };
+
+        let info = match self.outputs.get(&output.name()) {
+            Some(output) => output,
+            None => self.outputs.get_focused(),
+        };
         let window = Window::new_wayland_window(surface);
 
-        let id = self.next_window_id.next();
-        self.window_map.insert(id, window.clone());
+        self.window_registry.insert(WindowInfo {
+            window: window.clone(),
+            tag: info.current_tag,
+            output: info.id,
+        });
 
         self.space.map_element(window, (0, 0), false);
+
+        self.relayout();
+    }
+
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        let surface = surface.wl_surface();
+
+        self.remove_window(surface);
 
         self.relayout();
     }
@@ -49,6 +71,7 @@ impl XdgShellHandler for Alice {
     }
 
     fn reposition_request(&mut self, surface: PopupSurface, positioner: PositionerState, token: u32) {
+        return;
         surface.with_pending_state(|state| {
             let geometry = positioner.get_geometry();
             state.geometry = geometry;
@@ -59,6 +82,7 @@ impl XdgShellHandler for Alice {
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: wl_seat::WlSeat, serial: Serial) {
+        return;
         let seat = Seat::from_resource(&seat).unwrap();
 
         let wl_surface = surface.wl_surface();
@@ -91,6 +115,7 @@ impl XdgShellHandler for Alice {
         serial: Serial,
         edges: xdg_toplevel::ResizeEdge,
     ) {
+        return;
         let seat = Seat::from_resource(&seat).unwrap();
 
         let wl_surface = surface.wl_surface();
