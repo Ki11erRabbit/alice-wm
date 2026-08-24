@@ -25,13 +25,109 @@ pub struct WindowInfo {
     pub window: Window,
 }
 
+pub struct LayoutInfo {
+    stack: Vec<WindowId>,
+    focused_window: usize,
+}
+
+impl LayoutInfo {
+    pub fn new(stack: Vec<WindowId>) -> Self {
+        let focused_window = stack.len().saturating_sub(1);
+        Self {
+            stack,
+            focused_window
+        }
+    }
+
+    pub fn push(&mut self, id: WindowId) {
+        self.stack.push(id);
+        self.focused_window = self.stack.len().saturating_sub(1);
+    }
+
+    pub fn pop(&mut self) -> Option<WindowId> {
+        let out = self.stack.pop();
+        if self.focused_window >= self.stack.len() {
+            self.focused_window = self.focused_window.saturating_sub(1);
+        }
+        out
+    }
+
+    pub fn focused(&self) -> Option<WindowId> {
+        if self.stack.is_empty() {
+            return None;
+        }
+        self.stack.get(self.focused_window).map(|id| *id)
+    }
+
+    pub fn focus_up(&mut self) {
+        self.focused_window = (self.focused_window + 1) % self.stack.len();
+    }
+
+    pub fn focus_down(&mut self) {
+        let new = self.focused_window.saturating_sub(1);
+        if new == self.focused_window {
+            self.focused_window = self.stack.len() - 1;
+        } else {
+            self.focused_window = new;
+        }
+    }
+
+    pub fn move_up(&mut self) {
+        let (next, current) = if self.focused_window + 1 == self.stack.len() {
+            (0, self.focused_window)
+        } else {
+            (self.focused_window + 1, self.focused_window)
+        };
+        self.stack.swap(next, current);
+        self.focus_up();
+    }
+
+    pub fn move_down(&mut self) {
+        let next = self.focused_window.saturating_sub(1);
+        let next = if next == self.focused_window {
+            self.stack.len() - 1
+        } else {
+            next
+        };
+        let (next, current) = (next, self.focused_window);
+        self.stack.swap(next, current);
+        self.focus_down();
+    }
+
+    pub fn remove_window(&mut self, id: WindowId) {
+        let mut index = None;
+        for i in 0..self.stack.len() {
+            if self.stack[i] == id {
+                index = Some(i);
+                break;
+            }
+        }
+        if let Some(index) = index {
+            self.stack.remove(index);
+            if self.focused_window >= self.stack.len() {
+                self.focused_window = self.focused_window.saturating_sub(1);
+            }
+        }
+    }
+
+    pub fn change_focus(&mut self,id: WindowId) {
+        for (i, stack_id) in self.stack.iter().enumerate() {
+            if *stack_id == id {
+                self.focused_window = i;
+                break;
+            }
+        }
+    }
+}
+
 pub struct WindowRegistry {
     map: HashMap<WindowId, WindowInfo>,
     available_ids: Vec<WindowId>,
     next_window_id: WindowId,
-    order: HashMap<LayoutScope, Vec<WindowId>>,
+    order: HashMap<LayoutScope, LayoutInfo>,
     /// This field is to satisfy the typechecker on WindowRegistry::filter
     empty: Vec<WindowId>,
+    focused_window: WindowId,
 }
 
 impl WindowRegistry {
@@ -42,6 +138,7 @@ impl WindowRegistry {
             next_window_id: WindowId(0),
             order: HashMap::new(),
             empty: Vec::new(),
+            focused_window: WindowId(0),
         }
     }
 
@@ -58,37 +155,34 @@ impl WindowRegistry {
         .and_modify(|list| {
             list.push(id);
         })
-        .or_insert(vec![id]);
+        .or_insert(LayoutInfo::new(vec![id]));
         self.map.insert(id, info);
         id
     }
 
     pub fn remove(&mut self, id: WindowId) {
-        self.map.remove(&id);
-        for value in self.order.values_mut() {
-            let mut index = None;
-            for i in 0..value.len() {
-                if value[i] == id {
-                    index = Some(i);
-                    break;
-                }
-            }
-            if let Some(index) = index {
-                value.remove(index);
-                break;
-            }
-        }
+        let info = self.map.remove(&id);
         self.available_ids.push(id);
+        if let Some(info) = info {
+            let Some(layout) = self.order.get_mut(&LayoutScope {
+                output: info.output,
+                tag: info.tag,
+            }) else {
+                return
+            };
+
+            layout.remove_window(id);
+        }
     }
 
     pub fn filter(&self, scope: &LayoutScope) -> impl Iterator<Item = WindowId> {
         let Some(ordering) = self.order.get(scope) else {
             return self.empty.iter().rev().cloned();
         };
-        ordering.iter().rev().cloned()
+        ordering.stack.iter().rev().cloned()
     }
 
-    pub fn find(&mut self, window: Window) -> Option<WindowId> {
+    pub fn find(&self, window: Window) -> Option<WindowId> {
         let mut out_id = None;
         for (id, info) in self.map.iter() {
             if info.window == window {
@@ -102,4 +196,17 @@ impl WindowRegistry {
     pub fn get(&self,id: &WindowId) -> Option<&WindowInfo> {
         self.map.get(id)
     }
+
+    pub fn get_stack_mut(&mut self, scope: &LayoutScope) -> Option<&mut LayoutInfo> {
+        self.order.get_mut(scope)
+    }
+
+    pub fn change_focus(&mut self,id: WindowId) {
+        self.focused_window = id;
+    }
+
+    pub fn get_focused(&self) -> Option<&WindowInfo> {
+        self.get(&self.focused_window)
+    }
+
 }

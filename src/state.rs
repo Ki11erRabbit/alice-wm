@@ -6,7 +6,7 @@ use smithay::{
         wayland_server::{
             Display, DisplayHandle, backend::{ClientData, ClientId, DisconnectReason}, protocol::wl_surface::WlSurface
         },
-    }, utils::{Logical, Point}, wayland::{
+    }, utils::{Logical, Point, SERIAL_COUNTER}, wayland::{
         compositor::{CompositorClientState, CompositorState},
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
@@ -202,21 +202,113 @@ impl Alice {
             .ok();
     }
 
-    pub fn remove_window(&mut self, surface: &WlSurface) {
-        let Some(window) = self.space.elements()
+    pub fn get_window(&self, surface: &WlSurface) -> Option<(WindowId, Window)> {
+        let window = self.space.elements()
             .find(|w| w.toplevel().map(|t| t.wl_surface()) == Some(surface))
-            .cloned() else {
-            return;
-        };
+            .cloned()?;
 
-        let Some(id) = self.window_registry.find(window.clone()) else {
+        self.window_registry.find(window.clone())
+            .map(|id| (id, window))
+    }
+
+    pub fn remove_window(&mut self, surface: &WlSurface) {
+        let Some((id, window)) = self.get_window(surface) else {
             return;
         };
 
         self.window_registry.remove(id);
 
         self.space.unmap_elem(&window);
+    }
 
+    pub fn focus_window(&mut self, window: Window) {
+        let Some(id) = self.window_registry.find(window.clone()) else {
+            return;
+        };
+        self.change_focus(id, window.clone());
+    }
+
+    fn change_focus(&mut self, id: WindowId, window: Window) {
+        let Some(info) = self.window_registry.get(&id) else {
+            return;
+        };
+
+        let Some(stack) = self.window_registry.get_stack_mut(&LayoutScope {
+            output: info.output,
+            tag: info.tag,
+        }) else {
+            return;
+        };
+
+        stack.change_focus(id);
+        self.window_registry.change_focus(id);
+
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let serial = SERIAL_COUNTER.next_serial();
+        keyboard.set_focus(
+            self,
+            window.toplevel().map(|surface| surface.wl_surface().clone()),
+            serial
+        );
+
+    }
+
+    pub fn focus_up(&mut self) -> Option<()> {
+        let info = self.window_registry.get_focused()?;
+        let window = info.window.clone();
+        let stack = self.window_registry.get_stack_mut(&LayoutScope {
+            output: info.output,
+            tag: info.tag,
+        })?;
+
+        stack.focus_up();
+        let id = stack.focused()?;
+        self.change_focus(id, window);
+        Some(())
+    }
+
+    pub fn focus_down(&mut self) -> Option<()> {
+        let info = self.window_registry.get_focused()?;
+        let window = info.window.clone();
+        let stack = self.window_registry.get_stack_mut(&LayoutScope {
+            output: info.output,
+            tag: info.tag,
+        })?;
+
+        stack.focus_down();
+        let id = stack.focused()?;
+        self.change_focus(id, window);
+        Some(())
+    }
+
+    pub fn move_up(&mut self) -> Option<()> {
+        let info = self.window_registry.get_focused()?;
+        let window = info.window.clone();
+        let stack = self.window_registry.get_stack_mut(&LayoutScope {
+            output: info.output,
+            tag: info.tag,
+        })?;
+
+        stack.move_up();
+        let id = stack.focused()?;
+        self.change_focus(id, window);
+        self.relayout();
+        Some(())
+    }
+
+    pub fn move_down(&mut self) -> Option<()> {
+        let info = self.window_registry.get_focused()?;
+        let window = info.window.clone();
+        let stack = self.window_registry.get_stack_mut(&LayoutScope {
+            output: info.output,
+            tag: info.tag,
+        })?;
+
+        stack.move_down();
+        let id = stack.focused()?;
+        self.change_focus(id, window);
+        self.relayout();
+        Some(())
     }
 }
 

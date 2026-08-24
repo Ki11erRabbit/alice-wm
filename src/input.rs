@@ -29,15 +29,32 @@ impl Alice {
                     |state, modifiers, keysym_handle| {
                         let keysym = keysym_handle.modified_sym();
 
+
                         if key_state == KeyState::Pressed && modifiers.alt && keysym == Keysym::Return {
                             state.spawn("alacritty");
+                            return FilterResult::Intercept(());
+                        }
+                        else if key_state == KeyState::Pressed && modifiers.alt && modifiers.ctrl && keysym == Keysym::from_char('e') {
+                            state.move_up();
+                            return FilterResult::Intercept(());
+                        }
+                        else if key_state == KeyState::Pressed && modifiers.alt && modifiers.ctrl && keysym == Keysym::from_char('n') {
+                            state.move_down();
+                            return FilterResult::Intercept(());
+                        }
+                        else if key_state == KeyState::Pressed && modifiers.alt && keysym == Keysym::from_char('e') {
+                            state.focus_up();
+                            return FilterResult::Intercept(());
+                        }
+                        else if key_state == KeyState::Pressed && modifiers.alt && keysym == Keysym::from_char('n') {
+                            state.focus_down();
                             return FilterResult::Intercept(());
                         }
                         FilterResult::Forward
                     },
                 );
             }
-            InputEvent::PointerMotion { .. } => {}
+            InputEvent::PointerMotion { event, .. } => {}
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let output = self.space.outputs().next().unwrap();
 
@@ -50,6 +67,11 @@ impl Alice {
                 let pointer = self.seat.get_pointer().unwrap();
 
                 let under = self.surface_under(pos);
+                let surface_under = self.space.element_under(pointer.current_location());
+                if let Some((window, _)) = surface_under {
+                    self.focus_window(window.clone());
+                }
+
 
                 pointer.motion(
                     self,
