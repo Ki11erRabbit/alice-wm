@@ -9,6 +9,7 @@ mod winit;
 mod layout;
 mod output;
 mod window;
+mod config;
 
 use smithay::{output::{Mode, Output, PhysicalProperties, Scale, Subpixel}, reexports::{
     calloop::EventLoop,
