@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use smithay::output::Output;
 
@@ -9,6 +9,7 @@ use crate::layout::{Layout, MasterStack};
 pub struct Outputs {
     outputs: Vec<OutputInfo>,
     map: HashMap<String, OutputId>,
+    focused_tag: HashMap<OutputId, TagId>,
     focused_output: OutputId,
 }
 
@@ -17,6 +18,7 @@ impl Outputs {
         Self {
             outputs: Vec::with_capacity(3),
             map: HashMap::with_capacity(3),
+            focused_tag: HashMap::with_capacity(3),
             focused_output: OutputId(0),
         }
     }
@@ -29,8 +31,12 @@ impl Outputs {
             return *id
         }
         let index = self.outputs.len() as u32;
+        if self.map.is_empty() {
+            self.focused_output = OutputId(index);
+        }
         self.map.insert(output.name(), OutputId(index));
         self.outputs.push(OutputInfo::new(output, OutputId(index)));
+        self.focused_tag.insert(OutputId(index), TagId(0));
         OutputId(index)
     }
 
@@ -49,6 +55,18 @@ impl Outputs {
 
     pub fn change_focus(&mut self, id: OutputId) {
         self.focused_output = id;
+    }
+
+    pub fn change_tag(&mut self, tag: TagId) {
+        self.focused_tag.insert(self.focused_output, tag);
+    }
+
+    pub fn current_focused_tag(&self) -> Option<TagId> {
+        self.focused_tag.get(&self.focused_output).cloned()
+    }
+
+    pub fn get_focused_tag(&self, id: OutputId) -> Option<TagId> {
+        self.focused_tag.get(&id).copied()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &OutputInfo> {
@@ -87,6 +105,14 @@ impl OutputInfo {
 pub struct TagId(pub u32);
 #[derive(Clone, Copy,PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OutputId(pub u32);
+
+impl OutputId {
+    pub fn next(&mut self) -> Self {
+        let val = *self;
+        self.0 += 1;
+        val
+    }
+}
 
 pub struct LayoutRegistry {
     available: HashMap<&'static str, Box<dyn Layout>>,

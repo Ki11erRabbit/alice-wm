@@ -16,7 +16,7 @@ use smithay::{
     }
 };
 
-use crate::{CalloopData, layout::{Layout, MasterStack, Rect}, output::{LayoutRegistry, LayoutScope, Outputs}, window::{WindowId, WindowRegistry}};
+use crate::{CalloopData, layout::{Layout, MasterStack, Rect}, output::{LayoutRegistry, LayoutScope, OutputInfo, Outputs, TagId}, window::{LayoutInfo, WindowId, WindowRegistry}};
 
 pub struct Alice {
     pub start_time: std::time::Instant,
@@ -152,35 +152,48 @@ impl Alice {
         })
     }
 
-    pub fn relayout(&mut self) {
+    /// Pass in an scope to target only that output
+    pub fn relayout(&mut self, scope: Option<LayoutScope>) {
+        if let Some(scope) = scope {
+            let output = self.outputs.get_id(scope.output).clone();
+            self.relayout_single(output);
+            return;
+        }
+
         let outputs = self.outputs.iter()
             .cloned()
             .collect::<Vec<_>>();
 
         for output in outputs {
-            let geometry = self.space.output_geometry(&output.output).unwrap();
-            let area = Rect {
-                x: geometry.loc.x,
-                y: geometry.loc.y,
-                width: geometry.size.w,
-                height: geometry.size.h,
-            };
-
-            let scope = LayoutScope {
-                output: output.id,
-                tag: output.current_tag,
-            };
-            let mut windows = self.window_registry.filter(&scope)
-                .collect::<Vec<_>>();
-
-            let layout = self.layout_registry.get_layout(&scope);
-            let rects = layout.arrange(area, &windows);
-
-            for (id, rect) in windows.iter().zip(rects) {
-                self.apply_rects(*id, rect);
-            }
-
+            self.relayout_single(output);
         }
+    }
+
+    fn relayout_single(&mut self, output: OutputInfo) {
+        let tag = self.outputs.get_focused_tag(output.id).unwrap_or(TagId(0));
+        let geometry = self.space.output_geometry(&output.output).unwrap();
+        let area = Rect {
+            x: geometry.loc.x,
+            y: geometry.loc.y,
+            width: geometry.size.w,
+            height: geometry.size.h,
+        };
+
+        let scope = LayoutScope {
+            output: output.id,
+            tag,
+        };
+        let mut windows = self.window_registry.filter(&scope)
+            .collect::<Vec<_>>();
+
+        let layout = self.layout_registry.get_layout(&scope);
+        let rects = layout.arrange(area, &windows);
+
+        for (id, rect) in windows.iter().zip(rects) {
+            self.apply_rects(*id, rect);
+        }
+
+
     }
 
     fn apply_rects(&mut self, id: WindowId, rect: Rect) {
@@ -284,6 +297,8 @@ impl Alice {
     pub fn move_up(&mut self) -> Option<()> {
         let info = self.window_registry.get_focused()?;
         let window = info.window.clone();
+        let output = info.output;
+        let tag = info.tag;
         let stack = self.window_registry.get_stack_mut(&LayoutScope {
             output: info.output,
             tag: info.tag,
@@ -292,13 +307,18 @@ impl Alice {
         stack.move_up();
         let id = stack.focused()?;
         self.change_focus(id, window);
-        self.relayout();
+        self.relayout(Some(LayoutScope {
+            output,
+            tag,
+        }));
         Some(())
     }
 
     pub fn move_down(&mut self) -> Option<()> {
         let info = self.window_registry.get_focused()?;
         let window = info.window.clone();
+        let output = info.output;
+        let tag = info.tag;
         let stack = self.window_registry.get_stack_mut(&LayoutScope {
             output: info.output,
             tag: info.tag,
@@ -307,7 +327,64 @@ impl Alice {
         stack.move_down();
         let id = stack.focused()?;
         self.change_focus(id, window);
-        self.relayout();
+        self.relayout(Some(LayoutScope {
+            output,
+            tag,
+        }));
+        Some(())
+    }
+
+    pub fn change_tag(&mut self, tag: TagId) -> Option<()> {
+        let old_tag = self.outputs.current_focused_tag()?;
+
+        for id in self.window_registry.filter(&LayoutScope {
+            output: self.outputs.get_focused().id,
+            tag: old_tag,
+        }) {
+            let window = self.window_registry.get(&id)?;
+            self.space.unmap_elem(&window.window);
+        }
+        for id in self.window_registry.filter(&LayoutScope {
+            output: self.outputs.get_focused().id,
+            tag,
+        }) {
+            let window = self.window_registry.get(&id)?;
+            self.space.map_element(window.window.clone(), (0,0), false);
+        }
+        self.outputs.change_tag(tag);
+        self.relayout(Some(LayoutScope {
+            output: self.outputs.get_focused().id,
+            tag,
+        }));
+        Some(())
+    }
+
+    pub fn move_to_tag(&mut self, tag: TagId) -> Option<()> {
+        let info = self.window_registry.get_focused()?;
+        let window = info.window.clone();
+        self.space.unmap_elem(&window);
+        let id = self.window_registry.find(window)?;
+        let output = info.output;
+        let current_tag = info.tag;
+        let stack = self.window_registry.get_stack_mut(&LayoutScope {
+            output: info.output,
+            tag: info.tag,
+        })?;
+
+        stack.remove_window(id);
+        self.window_registry.stack_entry(LayoutScope {
+            output,
+            tag,
+        })
+        .and_modify(|stack| {
+            stack.push(id);
+        })
+        .or_insert(LayoutInfo::new(vec![id]));
+
+        self.relayout(Some(LayoutScope {
+            output,
+            tag: current_tag,
+        }));
         Some(())
     }
 }

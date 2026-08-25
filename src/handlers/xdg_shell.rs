@@ -23,7 +23,7 @@ use smithay::{
 };
 
 use crate::{
-    Alice, grabs::{MoveSurfaceGrab, ResizeSurfaceGrab}, window::WindowInfo
+    Alice, grabs::{MoveSurfaceGrab, ResizeSurfaceGrab}, output::LayoutScope, window::WindowInfo
 };
 
 impl XdgShellHandler for Alice {
@@ -36,7 +36,6 @@ impl XdgShellHandler for Alice {
             .current_location();
 
         let Some(output) = self.space.output_under(pointer_loc).next() else {
-            println!("no cursor");
             return;
         };
 
@@ -54,7 +53,10 @@ impl XdgShellHandler for Alice {
 
         self.space.map_element(window, (0, 0), false);
 
-        self.relayout();
+        self.relayout(Some(LayoutScope {
+            output: info.id,
+            tag: info.current_tag,
+        }));
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
@@ -62,7 +64,8 @@ impl XdgShellHandler for Alice {
 
         self.remove_window(surface);
 
-        self.relayout();
+        // TODO: this should probably only be the output the window is on.
+        self.relayout(None);
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {

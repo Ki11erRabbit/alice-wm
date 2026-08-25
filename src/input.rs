@@ -10,7 +10,7 @@ use smithay::{
     utils::SERIAL_COUNTER,
 };
 
-use crate::state::Alice;
+use crate::{output::TagId, state::Alice};
 
 impl Alice {
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
@@ -48,6 +48,22 @@ impl Alice {
                         }
                         else if key_state == KeyState::Pressed && modifiers.alt && keysym == Keysym::from_char('n') {
                             state.focus_down();
+                            return FilterResult::Intercept(());
+                        }
+                        else if key_state == KeyState::Pressed && modifiers.alt && modifiers.ctrl && keysym == Keysym::from_char('1') {
+                            state.move_to_tag(TagId(0));
+                            return FilterResult::Intercept(());
+                        }
+                        else if key_state == KeyState::Pressed && modifiers.alt && modifiers.ctrl && keysym == Keysym::from_char('2') {
+                            state.move_to_tag(TagId(1));
+                            return FilterResult::Intercept(());
+                        }
+                        else if key_state == KeyState::Pressed && modifiers.alt && keysym == Keysym::from_char('1') {
+                            state.change_tag(TagId(0));
+                            return FilterResult::Intercept(());
+                        }
+                        else if key_state == KeyState::Pressed && modifiers.alt && keysym == Keysym::from_char('2') {
+                            state.change_tag(TagId(1));
                             return FilterResult::Intercept(());
                         }
                         FilterResult::Forward

@@ -56,7 +56,7 @@ impl LayoutInfo {
         if self.stack.is_empty() {
             return None;
         }
-        self.stack.get(self.focused_window).map(|id| *id)
+        self.stack.get(self.focused_window).copied()
     }
 
     pub fn focus_up(&mut self) {
@@ -207,6 +207,13 @@ impl WindowRegistry {
 
     pub fn get_focused(&self) -> Option<&WindowInfo> {
         self.get(&self.focused_window)
+    }
+
+    pub fn stack_entry(
+        &mut self,
+        scope: LayoutScope
+    ) -> std::collections::hash_map::Entry<'_, LayoutScope, LayoutInfo> {
+        self.order.entry(scope)
     }
 
 }
