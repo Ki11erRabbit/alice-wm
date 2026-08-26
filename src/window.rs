@@ -23,6 +23,22 @@ pub struct WindowInfo {
     pub tag: TagId,
     pub output: OutputId,
     pub window: Window,
+    pub fullscreen: bool,
+}
+
+impl WindowInfo {
+    pub fn new(
+        tag: TagId,
+        output: OutputId,
+        window: Window,
+    ) -> Self {
+        Self {
+            tag,
+            output,
+            window,
+            fullscreen: false,
+        }
+    }
 }
 
 pub struct LayoutInfo {
@@ -118,6 +134,7 @@ impl LayoutInfo {
             }
         }
     }
+
 }
 
 pub struct WindowRegistry {
@@ -197,6 +214,10 @@ impl WindowRegistry {
         self.map.get(id)
     }
 
+    pub fn get_mut(&mut self,id: &WindowId) -> Option<&mut WindowInfo> {
+        self.map.get_mut(id)
+    }
+
     pub fn get_stack_mut(&mut self, scope: &LayoutScope) -> Option<&mut LayoutInfo> {
         self.order.get_mut(scope)
     }
@@ -209,6 +230,11 @@ impl WindowRegistry {
         self.get(&self.focused_window)
     }
 
+    pub fn get_focused_mut(&mut self) -> Option<&mut WindowInfo> {
+        let focused_window = self.focused_window;
+        self.get_mut(&focused_window)
+    }
+
     pub fn stack_entry(
         &mut self,
         scope: LayoutScope
@@ -216,4 +242,7 @@ impl WindowRegistry {
         self.order.entry(scope)
     }
 
+    pub fn focused_window(&self) -> WindowId {
+        self.focused_window
+    }
 }

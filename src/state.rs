@@ -1,11 +1,10 @@
-use std::{collections::HashMap, ffi::OsString, sync::Arc};
+use std::{ffi::OsString, sync::Arc};
 
 use smithay::{
     desktop::{PopupManager, Space, Window, WindowSurfaceType}, input::{Seat, SeatState, keyboard::{Keysym, ModifiersState}}, output::Output, reexports::{
-        calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic},
-        wayland_server::{
+        calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic}, wayland_protocols::xdg::shell::server::xdg_toplevel, wayland_server::{
             Display, DisplayHandle, backend::{ClientData, ClientId, DisconnectReason}, protocol::wl_surface::WlSurface
-        },
+        }
     }, utils::{Logical, Point, SERIAL_COUNTER}, wayland::{
         compositor::{CompositorClientState, CompositorState},
         output::OutputManagerState,
@@ -190,6 +189,10 @@ impl Alice {
         let mut windows = self.window_registry.filter(&scope)
             .collect::<Vec<_>>();
 
+        if self.try_full_screen(area, &windows) {
+            return;
+        }
+
         let layout = self.layout_registry.get_layout(&scope);
         let rects = layout.arrange(area, &windows);
 
@@ -204,9 +207,45 @@ impl Alice {
         let window = self.window_registry.get(&id).unwrap();
         window.window.toplevel().unwrap().with_pending_state(|state| {
             state.size = Some((rect.width, rect.height).into());
+            if window.fullscreen {
+                state.states.set(xdg_toplevel::State::Fullscreen)
+            } else {
+                state.states.unset(xdg_toplevel::State::Fullscreen)
+            }
         });
         window.window.toplevel().unwrap().send_configure();
         self.space.map_element(window.window.clone(), (rect.x, rect.y), false);
+    }
+
+    fn try_full_screen(&mut self, area: Rect, windows: &[WindowId]) -> bool {
+        let mut first_fullscreen = None;
+
+        for id in windows.iter().rev() {
+            let Some(window) = self.window_registry.get(id) else {
+                continue;
+            };
+            if window.fullscreen {
+                first_fullscreen = Some(*id);
+                break;
+            }
+        }
+
+        let Some(window) = first_fullscreen else {
+            return false;
+        };
+
+        for id in windows {
+            if *id == window {
+                self.apply_rects(window, area);
+                continue
+            }
+            let Some(window) = self.window_registry.get(id) else {
+                continue;
+            };
+            self.space.unmap_elem(&window.window);
+        }
+
+        true
     }
 
     pub fn spawn(&self, command: &str) {
@@ -438,6 +477,19 @@ impl Alice {
         Some(())
     }
 
+    pub fn toggle_fullscreen(&mut self, id: WindowId) -> Option<()> {
+        let window = self.window_registry.get_mut(&id)?;
+        window.fullscreen = !window.fullscreen;
+        let output = window.output;
+        let tag = window.tag;
+
+        self.relayout(Some(LayoutScope {
+            output,
+            tag,
+        }));
+        Some(())
+    }
+
     /// Returns `true` if the keypress was handled
     pub fn try_handle_keypress(&mut self, mods: &ModifiersState, sym: Keysym) -> bool {
         let keypress = KeyPress::from((mods, sym));
@@ -462,6 +514,10 @@ impl Alice {
                 if let Some(toplevel) = info.window.toplevel() {
                     toplevel.send_close();
                 }
+            }
+            Action::FullScreen => {
+                let id = self.window_registry.focused_window();
+                _ = self.toggle_fullscreen(id);
             }
             Action::Spawn(command) => {
                 self.spawn(&command);

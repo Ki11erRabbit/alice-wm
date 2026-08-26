@@ -12,6 +12,7 @@ pub enum Action {
     Quit,
     ReloadConfig,
     Close,
+    FullScreen,
     Spawn(String),
     FocusTag(TagId),
     MoveToTag(TagId),
@@ -256,6 +257,11 @@ impl Default for Config {
 
         map.insert(KeyPress {
             modifiers: main_mod,
+            keysym: Keysym::from_char('f'),
+        }, Action::FullScreen);
+
+        map.insert(KeyPress {
+            modifiers: main_mod,
             keysym: Keysym::Return,
         }, Action::Spawn(String::from("alacritty")));
 
@@ -297,6 +303,9 @@ fn create_lua() -> mlua::Result<Lua> {
     })?)?;
     action_table.set("reload_config", lua.create_function(|_, _: ()| {
         Ok(Action::ReloadConfig)
+    })?)?;
+    action_table.set("full_screen", lua.create_function(|_, _: ()| {
+        Ok(Action::FullScreen)
     })?)?;
     action_table.set("spawn", lua.create_function(|_, cmd: String| {
         Ok(Action::Spawn(cmd))

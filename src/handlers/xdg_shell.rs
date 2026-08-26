@@ -49,11 +49,7 @@ impl XdgShellHandler for Alice {
         };
         let window = Window::new_wayland_window(surface);
 
-        let id = self.window_registry.insert(WindowInfo {
-            window: window.clone(),
-            tag: focused_tag,
-            output: info.id,
-        });
+        let id = self.window_registry.insert(WindowInfo::new(focused_tag, info.id, window.clone()));
 
         self.space.map_element(window.clone(), (0, 0), true);
 
