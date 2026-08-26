@@ -385,13 +385,58 @@ impl Alice {
         })
         .or_insert(LayoutInfo::new(vec![id]));
 
-        self.relayout(Some(LayoutScope {
-            output,
-            tag: current_tag,
-        }));
+        self.change_tag(tag)?;
         Some(())
     }
 
+    fn focus_next_tag(&mut self) -> Option<()> {
+        let mut tag = self.outputs.current_focused_tag()?;
+        if tag.0 != 8 {
+            tag.0 += 1;
+            self.change_tag(tag);
+        }
+        Some(())
+    }
+
+    fn focus_prevous_tag(&mut self) -> Option<()> {
+        let mut tag = self.outputs.current_focused_tag()?;
+        let new_tag = tag.0.saturating_sub(1);
+        if tag.0 != new_tag {
+            self.change_tag(TagId(new_tag));
+        }
+        Some(())
+    }
+
+    fn move_next_tag(&mut self) -> Option<()> {
+        let mut tag = self.outputs.current_focused_tag()?;
+        if tag.0 != 8 {
+            tag.0 += 1;
+            self.move_to_tag(tag);
+        }
+        Some(())
+    }
+
+    fn move_prevous_tag(&mut self) -> Option<()> {
+        let mut tag = self.outputs.current_focused_tag()?;
+        let new_tag = tag.0.saturating_sub(1);
+        if tag.0 != new_tag {
+            self.move_to_tag(TagId(new_tag));
+        }
+        Some(())
+    }
+
+    fn change_layout(&mut self, name: &str) -> Option<()> {
+        let info = self.outputs.get_focused();
+        let tag = self.outputs.get_focused_tag(info.id)?;
+
+        let scope = LayoutScope {
+            output: info.id,
+            tag,
+        };
+
+        self.layout_registry.set_active(scope, name);
+        Some(())
+    }
 
     /// Returns `true` if the keypress was handled
     pub fn try_handle_keypress(&mut self, mods: &ModifiersState, sym: Keysym) -> bool {
@@ -411,7 +456,12 @@ impl Alice {
             Action::Quit => std::process::exit(0),
             Action::ReloadConfig => {}
             Action::Close => {
-
+                let Some(info) = self.window_registry.get_focused() else {
+                    return;
+                };
+                if let Some(toplevel) = info.window.toplevel() {
+                    toplevel.send_close();
+                }
             }
             Action::Spawn(command) => {
                 self.spawn(&command);
@@ -423,19 +473,19 @@ impl Alice {
                 self.move_to_tag(id);
             }
             Action::FocusNextTag => {
-
+                self.focus_next_tag();
             }
             Action::FocusPreviousTag => {
-
+                self.focus_prevous_tag();
             }
             Action::MoveNextTag => {
-
+                self.move_next_tag();
             }
             Action::MovePreviousTag => {
-
+                self.move_prevous_tag();
             }
             Action::SetLayout(layout) => {
-
+                _ = self.change_layout(&layout);
             }
             Action::FocusDownStack => {
                 _ = self.focus_down();
