@@ -25,9 +25,7 @@ impl Outputs {
 
     pub fn insert(&mut self, output: Output) -> OutputId {
         if let Some(id) = self.map.get(&output.name()) {
-            let tag = self.outputs[id.0 as usize].current_tag;
             self.outputs[id.0 as usize] = OutputInfo::new(output, *id);
-            self.outputs[id.0 as usize].current_tag = tag;
             return *id
         }
         let index = self.outputs.len() as u32;
@@ -86,7 +84,6 @@ impl Outputs {
 pub struct OutputInfo {
     pub output: Output,
     pub id: OutputId,
-    pub current_tag: TagId,
     pub active: bool,
 }
 
@@ -95,7 +92,6 @@ impl OutputInfo {
         Self {
             output,
             id,
-            current_tag: TagId(0),
             active: true,
         }
     }

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ffi::OsString, sync::Arc};
 
 use smithay::{
-    desktop::{PopupManager, Space, Window, WindowSurfaceType}, input::{Seat, SeatState}, output::Output, reexports::{
+    desktop::{PopupManager, Space, Window, WindowSurfaceType}, input::{Seat, SeatState, keyboard::{Keysym, ModifiersState}}, output::Output, reexports::{
         calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic},
         wayland_server::{
             Display, DisplayHandle, backend::{ClientData, ClientId, DisconnectReason}, protocol::wl_surface::WlSurface
@@ -16,7 +16,7 @@ use smithay::{
     }
 };
 
-use crate::{CalloopData, layout::{Layout, MasterStack, Rect}, output::{LayoutRegistry, LayoutScope, OutputInfo, Outputs, TagId}, window::{LayoutInfo, WindowId, WindowRegistry}};
+use crate::{CalloopData, config::{Action, Config, KeyPress}, layout::{Layout, MasterStack, Rect}, output::{LayoutRegistry, LayoutScope, OutputInfo, Outputs, TagId}, window::{LayoutInfo, WindowId, WindowRegistry}};
 
 pub struct Alice {
     pub start_time: std::time::Instant,
@@ -29,6 +29,8 @@ pub struct Alice {
     pub window_registry: WindowRegistry,
     pub outputs: Outputs,
     pub layout_registry: LayoutRegistry,
+
+    pub config: Config,
 
     // Smithay State
     pub compositor_state: CompositorState,
@@ -90,6 +92,8 @@ impl Alice {
             window_registry: WindowRegistry::new(),
             outputs: Outputs::new(),
             layout_registry: LayoutRegistry::new(),
+
+            config: Config::default(),
 
             compositor_state,
             xdg_shell_state,
@@ -241,7 +245,7 @@ impl Alice {
         self.change_focus(id, window.clone());
     }
 
-    fn change_focus(&mut self, id: WindowId, window: Window) {
+    pub fn change_focus(&mut self, id: WindowId, window: Window) {
         let Some(info) = self.window_registry.get(&id) else {
             return;
         };
@@ -386,6 +390,69 @@ impl Alice {
             tag: current_tag,
         }));
         Some(())
+    }
+
+
+    /// Returns `true` if the keypress was handled
+    pub fn try_handle_keypress(&mut self, mods: &ModifiersState, sym: Keysym) -> bool {
+        let keypress = KeyPress::from((mods, sym));
+
+        if let Some(action) = self.config.get_keypress(&keypress) {
+            let action = action.clone();
+            self.handle_action(action);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn handle_action(&mut self, action: Action) {
+        match action {
+            Action::Quit => std::process::exit(0),
+            Action::ReloadConfig => {}
+            Action::Close => {
+
+            }
+            Action::Spawn(command) => {
+                self.spawn(&command);
+            }
+            Action::FocusTag(id) => {
+                self.change_tag(id);
+            }
+            Action::MoveToTag(id) => {
+                self.move_to_tag(id);
+            }
+            Action::FocusNextTag => {
+
+            }
+            Action::FocusPreviousTag => {
+
+            }
+            Action::MoveNextTag => {
+
+            }
+            Action::MovePreviousTag => {
+
+            }
+            Action::SetLayout(layout) => {
+
+            }
+            Action::FocusDownStack => {
+                _ = self.focus_down();
+            }
+            Action::FocusUpStack => {
+                _ = self.focus_up();
+            }
+            Action::MoveDownStack => {
+                _ = self.focus_down();
+            }
+            Action::MoveUpStack => {
+                _ = self.focus_up();
+            }
+
+
+        }
+
     }
 }
 

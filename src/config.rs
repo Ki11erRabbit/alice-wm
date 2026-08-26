@@ -7,12 +7,12 @@ use crate::output::TagId;
 
 
 
-
+#[derive(Clone)]
 pub enum Action {
     Quit,
     ReloadConfig,
+    Close,
     Spawn(String),
-    SpawnAtStartup(String),
     FocusTag(TagId),
     MoveToTag(TagId),
     FocusNextTag,
@@ -123,6 +123,149 @@ impl Config {
     }
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        let mut map = HashMap::new();
+        let main_mod = ModMask::Alt;
+
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('j'),
+        }, Action::FocusDownStack);
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('k'),
+        }, Action::FocusUpStack);
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('u'),
+        }, Action::FocusPreviousTag);
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('i'),
+        }, Action::FocusNextTag);
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('q'),
+        }, Action::Close);
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('r'),
+        }, Action::ReloadConfig);
+
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('j'),
+        }, Action::MoveDownStack);
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('k'),
+        }, Action::MoveUpStack);
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('u'),
+        }, Action::MovePreviousTag);
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('i'),
+        }, Action::MoveNextTag);
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('q'),
+        }, Action::Quit);
+
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('1'),
+        }, Action::FocusTag(TagId(0)));
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('2'),
+        }, Action::FocusTag(TagId(1)));
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('3'),
+        }, Action::FocusTag(TagId(2)));
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('4'),
+        }, Action::FocusTag(TagId(3)));
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('5'),
+        }, Action::FocusTag(TagId(4)));
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('6'),
+        }, Action::FocusTag(TagId(5)));
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('7'),
+        }, Action::FocusTag(TagId(6)));
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('8'),
+        }, Action::FocusTag(TagId(7)));
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('9'),
+        }, Action::FocusTag(TagId(8)));
+
+
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('1'),
+        }, Action::MoveToTag(TagId(0)));
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('2'),
+        }, Action::MoveToTag(TagId(1)));
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('3'),
+        }, Action::MoveToTag(TagId(2)));
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('4'),
+        }, Action::MoveToTag(TagId(3)));
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('5'),
+        }, Action::MoveToTag(TagId(4)));
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('6'),
+        }, Action::MoveToTag(TagId(5)));
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('7'),
+        }, Action::MoveToTag(TagId(6)));
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('8'),
+        }, Action::MoveToTag(TagId(7)));
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::from_char('9'),
+        }, Action::MoveToTag(TagId(8)));
+
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::from_char('t'),
+        }, Action::SetLayout(String::from("MasterStack")));
+
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::Return,
+        }, Action::Spawn(String::from("alacritty")));
+
+
+        Self {
+            map
+        }
+    }
+}
+
 /// Creates a lua interpreter with all need modules
 fn create_lua() -> mlua::Result<Lua> {
     let lua = Lua::new();
@@ -157,9 +300,6 @@ fn create_lua() -> mlua::Result<Lua> {
     })?)?;
     action_table.set("spawn", lua.create_function(|_, cmd: String| {
         Ok(Action::Spawn(cmd))
-    })?)?;
-    action_table.set("spawn_at_startup", lua.create_function(|_, cmd: String| {
-        Ok(Action::SpawnAtStartup(cmd))
     })?)?;
     action_table.set("focus_tag", lua.create_function(|_, tag_id: i64| {
         if tag_id <= 0 {

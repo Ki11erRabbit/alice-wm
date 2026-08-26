@@ -23,7 +23,7 @@ use smithay::{
 };
 
 use crate::{
-    Alice, grabs::{MoveSurfaceGrab, ResizeSurfaceGrab}, output::LayoutScope, window::WindowInfo
+    Alice, grabs::{MoveSurfaceGrab, ResizeSurfaceGrab}, output::{LayoutScope, TagId}, window::WindowInfo
 };
 
 impl XdgShellHandler for Alice {
@@ -43,20 +43,25 @@ impl XdgShellHandler for Alice {
             Some(output) => output,
             None => self.outputs.get_focused(),
         };
+        let focused_tag = match self.outputs.get_focused_tag(info.id) {
+            Some(tag) => tag,
+            None => TagId(0),
+        };
         let window = Window::new_wayland_window(surface);
 
-        self.window_registry.insert(WindowInfo {
+        let id = self.window_registry.insert(WindowInfo {
             window: window.clone(),
-            tag: info.current_tag,
+            tag: focused_tag,
             output: info.id,
         });
 
-        self.space.map_element(window, (0, 0), false);
+        self.space.map_element(window.clone(), (0, 0), true);
 
         self.relayout(Some(LayoutScope {
             output: info.id,
-            tag: info.current_tag,
+            tag: focused_tag,
         }));
+        self.change_focus(id, window);
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {

@@ -29,41 +29,7 @@ impl Alice {
                     |state, modifiers, keysym_handle| {
                         let keysym = keysym_handle.modified_sym();
 
-
-                        if key_state == KeyState::Pressed && modifiers.alt && keysym == Keysym::Return {
-                            state.spawn("alacritty");
-                            return FilterResult::Intercept(());
-                        }
-                        else if key_state == KeyState::Pressed && modifiers.alt && modifiers.ctrl && keysym == Keysym::from_char('e') {
-                            state.move_up();
-                            return FilterResult::Intercept(());
-                        }
-                        else if key_state == KeyState::Pressed && modifiers.alt && modifiers.ctrl && keysym == Keysym::from_char('n') {
-                            state.move_down();
-                            return FilterResult::Intercept(());
-                        }
-                        else if key_state == KeyState::Pressed && modifiers.alt && keysym == Keysym::from_char('e') {
-                            state.focus_up();
-                            return FilterResult::Intercept(());
-                        }
-                        else if key_state == KeyState::Pressed && modifiers.alt && keysym == Keysym::from_char('n') {
-                            state.focus_down();
-                            return FilterResult::Intercept(());
-                        }
-                        else if key_state == KeyState::Pressed && modifiers.alt && modifiers.ctrl && keysym == Keysym::from_char('1') {
-                            state.move_to_tag(TagId(0));
-                            return FilterResult::Intercept(());
-                        }
-                        else if key_state == KeyState::Pressed && modifiers.alt && modifiers.ctrl && keysym == Keysym::from_char('2') {
-                            state.move_to_tag(TagId(1));
-                            return FilterResult::Intercept(());
-                        }
-                        else if key_state == KeyState::Pressed && modifiers.alt && keysym == Keysym::from_char('1') {
-                            state.change_tag(TagId(0));
-                            return FilterResult::Intercept(());
-                        }
-                        else if key_state == KeyState::Pressed && modifiers.alt && keysym == Keysym::from_char('2') {
-                            state.change_tag(TagId(1));
+                        if key_state == KeyState::Pressed && state.try_handle_keypress(modifiers, keysym) {
                             return FilterResult::Intercept(());
                         }
                         FilterResult::Forward
