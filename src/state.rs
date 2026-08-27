@@ -248,6 +248,24 @@ impl Alice {
         true
     }
 
+    pub fn undo_all_fullscreen(&mut self) -> Option<()> {
+        let tag = self.outputs.current_focused_tag()?;
+        let output = self.outputs.get_focused().id;
+        let scope = LayoutScope {
+            output,
+            tag,
+        };
+
+        let windows = self.window_registry.filter(&scope).collect::<Vec<_>>();
+        for window in windows {
+            let Some(info) = self.window_registry.get_mut(&window) else {
+                continue;
+            };
+            info.fullscreen = false;
+        }
+        Some(())
+    }
+
     pub fn spawn(&self, command: &str) {
         let socket_name = self.socket_name.clone();
         std::process::Command::new("sh")
@@ -288,14 +306,20 @@ impl Alice {
         let Some(info) = self.window_registry.get(&id) else {
             return;
         };
+        let fullscreen = info.fullscreen;
+        let output = info.output;
+        let tag = info.tag;
 
         let Some(stack) = self.window_registry.get_stack_mut(&LayoutScope {
-            output: info.output,
-            tag: info.tag,
+            output,
+            tag,
         }) else {
             return;
         };
 
+        if fullscreen {
+            stack.move_down();
+        }
         stack.change_focus(id);
         self.window_registry.change_focus(id);
 
@@ -306,6 +330,12 @@ impl Alice {
             window.toplevel().map(|surface| surface.wl_surface().clone()),
             serial
         );
+        if fullscreen {
+            self.relayout(Some(LayoutScope {
+                output,
+                tag
+            }));
+        }
 
     }
 

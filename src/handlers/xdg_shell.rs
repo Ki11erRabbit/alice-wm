@@ -43,6 +43,7 @@ impl XdgShellHandler for Alice {
             Some(output) => output,
             None => self.outputs.get_focused(),
         };
+        let output = info.id;
         let focused_tag = match self.outputs.get_focused_tag(info.id) {
             Some(tag) => tag,
             None => TagId(0),
@@ -52,9 +53,10 @@ impl XdgShellHandler for Alice {
         let id = self.window_registry.insert(WindowInfo::new(focused_tag, info.id, window.clone()));
 
         self.space.map_element(window.clone(), (0, 0), true);
+        self.undo_all_fullscreen();
 
         self.relayout(Some(LayoutScope {
-            output: info.id,
+            output,
             tag: focused_tag,
         }));
         self.change_focus(id, window);
