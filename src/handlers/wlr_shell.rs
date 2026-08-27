@@ -1,3 +1,4 @@
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::shell::xdg::PopupSurface;
 use smithay::{output::Output, wayland::shell::wlr_layer::WlrLayerShellHandler};
 use smithay::desktop::{LayerSurface as DesktopLayerSurface, layer_map_for_output};
@@ -44,10 +45,7 @@ impl WlrLayerShellHandler for Alice {
             eprintln!("failed to map layer surface: {e:?}");
             return
         }
-        map.arrange();
         drop(map);
-
-        desktop_surface.layer_surface().send_configure();
 
         self.layer_surfaces.insert(id, desktop_surface);
         self.relayout(Some(LayoutScope {
@@ -64,11 +62,11 @@ impl WlrLayerShellHandler for Alice {
         let output = &self.outputs.get_id(output_id).output;
 
         let mut map = layer_map_for_output(output);
-        map.unmap_layer(&surface);
+        map.unmap_layer(&surface.surface);
         drop(map);
 
         self.layer_surfaces.get_mut(&output_id)
-            .map(|layers| layers.retain(|s| s != &surface));
+            .map(|layers| layers.retain(|s| s.surface != surface.surface));
 
         let Some(tag) = self.outputs.get_focused_tag(output_id) else {
             return;
@@ -82,5 +80,28 @@ impl WlrLayerShellHandler for Alice {
 
 }
 
+pub fn handle_commit(state: &mut Alice, surface: &WlSurface) {
+    let Some((output_id, info)) = state.layer_surfaces.find_by_wl_surface(surface) else {
+        return;
+    };
+
+    let output = state.outputs.get_id(output_id).output.clone();
+    let mut map = layer_map_for_output(&output);
+    map.arrange();
+    drop(map);
+
+    if !info.init_config {
+        info.surface.layer_surface().send_configure();
+        info.init_config = true;
+    }
+
+    let Some(tag) = state.outputs.get_focused_tag(output_id) else {
+        return;
+    };
+    state.relayout(Some(LayoutScope {
+        output: output_id,
+        tag,
+    }));
+}
 
 smithay::delegate_layer_shell!(Alice);

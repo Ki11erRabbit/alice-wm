@@ -1,4 +1,4 @@
-use crate::{grabs::resize_grab, state::ClientState, Alice};
+use crate::{Alice, grabs::resize_grab, state::ClientState};
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_shm,
@@ -16,6 +16,7 @@ use smithay::{
 };
 
 use super::xdg_shell;
+use super::wlr_shell;
 
 impl CompositorHandler for Alice {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -44,6 +45,7 @@ impl CompositorHandler for Alice {
 
         xdg_shell::handle_commit(&mut self.popups, &self.space, surface);
         resize_grab::handle_commit(&mut self.space, surface);
+        wlr_shell::handle_commit(self, surface);
     }
 }
 
