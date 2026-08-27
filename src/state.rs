@@ -1,7 +1,7 @@
 use std::{ffi::OsString, sync::Arc};
 
 use smithay::{
-    desktop::{PopupManager, Space, Window, WindowSurfaceType}, input::{Seat, SeatState, keyboard::{Keysym, ModifiersState}}, output::Output, reexports::{
+    backend::renderer::{Renderer, element::{AsRenderElements, RenderElement}}, desktop::{PopupManager, Space, Window, WindowSurfaceType, layer_map_for_output, space::space_render_elements}, input::{Seat, SeatState, keyboard::{Keysym, ModifiersState}}, output::Output, reexports::{
         calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic}, wayland_protocols::xdg::shell::server::xdg_toplevel, wayland_server::{
             Display, DisplayHandle, backend::{ClientData, ClientId, DisconnectReason}, protocol::wl_surface::WlSurface
         }
@@ -9,13 +9,13 @@ use smithay::{
         compositor::{CompositorClientState, CompositorState},
         output::OutputManagerState,
         selection::data_device::DataDeviceState,
-        shell::xdg::XdgShellState,
+        shell::{wlr_layer::{self, WlrLayerShellState}, xdg::XdgShellState},
         shm::ShmState,
         socket::ListeningSocketSource,
     }
 };
 
-use crate::{CalloopData, config::{Action, Config, KeyPress, execute_lua_config}, layout::{Layout, MasterStack, Rect}, output::{LayoutRegistry, LayoutScope, OutputInfo, Outputs, TagId}, window::{LayoutInfo, WindowId, WindowRegistry}};
+use crate::{CalloopData, config::{Action, Config, KeyPress, execute_lua_config}, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputInfo, Outputs, TagId}, window::{LayoutInfo, WindowId, WindowRegistry}};
 
 pub struct Alice {
     pub start_time: std::time::Instant,
@@ -28,6 +28,9 @@ pub struct Alice {
     pub window_registry: WindowRegistry,
     pub outputs: Outputs,
     pub layout_registry: LayoutRegistry,
+
+    pub layer_surfaces: LayerRegistry,
+    pub layer_shell_state: WlrLayerShellState,
 
     pub config: Config,
 
@@ -47,7 +50,7 @@ impl Alice {
     pub fn new(event_loop: &mut EventLoop<CalloopData>, display: Display<Self>) -> Self {
         let start_time = std::time::Instant::now();
 
-        let dh = display.handle();
+        let dh: DisplayHandle  = display.handle();
 
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
@@ -88,6 +91,8 @@ impl Alice {
             }
         };
 
+        let layer_shell_state = WlrLayerShellState::new::<Alice>(&dh);
+
         Self {
             start_time,
             display_handle: dh,
@@ -99,6 +104,9 @@ impl Alice {
             window_registry: WindowRegistry::new(),
             outputs: Outputs::new(),
             layout_registry: LayoutRegistry::new(),
+
+            layer_surfaces: LayerRegistry::new(),
+            layer_shell_state,
 
             config,
 
@@ -182,13 +190,7 @@ impl Alice {
 
     fn relayout_single(&mut self, output: OutputInfo) {
         let tag = self.outputs.get_focused_tag(output.id).unwrap_or(TagId(0));
-        let geometry = self.space.output_geometry(&output.output).unwrap();
-        let area = Rect {
-            x: geometry.loc.x,
-            y: geometry.loc.y,
-            width: geometry.size.w,
-            height: geometry.size.h,
-        };
+        let area = self.usable_area(&output.output);
 
         let scope = LayoutScope {
             output: output.id,
@@ -223,6 +225,19 @@ impl Alice {
         });
         window.window.toplevel().unwrap().send_configure();
         self.space.map_element(window.window.clone(), (rect.x, rect.y), false);
+    }
+
+
+    fn usable_area(&mut self, output: &Output) -> Rect {
+        let map = layer_map_for_output(output);
+        let zone = map.non_exclusive_zone();
+
+        Rect {
+            x: zone.loc.x,
+            y: zone.loc.y,
+            width: zone.size.w,
+            height: zone.size.h,
+        }
     }
 
     fn try_full_screen(&mut self, area: Rect, windows: &[WindowId]) -> bool {

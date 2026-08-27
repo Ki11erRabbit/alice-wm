@@ -10,6 +10,7 @@ mod layout;
 mod output;
 mod window;
 mod config;
+mod layer;
 
 use smithay::{output::{Mode, Output, PhysicalProperties, Scale, Subpixel}, reexports::{
     calloop::EventLoop,
