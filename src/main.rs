@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
              size: (1920, 1080).into(),
              refresh: 60
         }),
-        Some(Transform::Normal),
+        Some(Transform::Flipped180),
         Some(Scale::Integer(1)),
         Some((0, 0).into())
     );
@@ -61,14 +61,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     );
     state.space.map_output(&output, (0, 0));
-    state.outputs.insert(output);
+    state.outputs.insert(output.clone());
 
     let mut data = CalloopData {
         state,
         display_handle,
     };
 
-    crate::winit::init_winit(&mut event_loop, &mut data)?;
+    crate::winit::init_winit(&mut event_loop, &mut data, output)?;
 
 
     let mut args = std::env::args().skip(1);

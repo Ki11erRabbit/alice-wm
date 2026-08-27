@@ -17,31 +17,13 @@ use crate::{CalloopData, Alice};
 pub fn init_winit(
     event_loop: &mut EventLoop<CalloopData>,
     data: &mut CalloopData,
+    output: Output,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let display_handle = &mut data.display_handle;
     let state = &mut data.state;
 
     let (mut backend, winit) = winit::init()?;
 
-    let mode = Mode {
-        size: backend.window_size(),
-        refresh: 60_000,
-    };
-
-    let output = Output::new(
-        "winit".to_string(),
-        PhysicalProperties {
-            size: (0, 0).into(),
-            subpixel: Subpixel::Unknown,
-            make: "Smithay".into(),
-            model: "Winit".into(),
-        },
-    );
-    let _global = output.create_global::<Alice>(display_handle);
-    output.change_current_state(Some(mode), Some(Transform::Flipped180), None, Some((0, 0).into()));
-    output.set_preferred(mode);
-
-    state.space.map_output(&output, (0, 0));
 
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
 

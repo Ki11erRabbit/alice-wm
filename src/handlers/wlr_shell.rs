@@ -40,7 +40,10 @@ impl WlrLayerShellHandler for Alice {
         let desktop_surface = DesktopLayerSurface::new(surface, namespace);
 
         let mut map = layer_map_for_output(&output);
-        map.map_layer(&desktop_surface);
+        if let Err(e) = map.map_layer(&desktop_surface) {
+            eprintln!("failed to map layer surface: {e:?}");
+            return
+        }
         map.arrange();
         drop(map);
 
