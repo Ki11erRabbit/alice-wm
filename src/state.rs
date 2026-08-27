@@ -15,7 +15,7 @@ use smithay::{
     }
 };
 
-use crate::{CalloopData, config::{Action, Config, KeyPress}, layout::{Layout, MasterStack, Rect}, output::{LayoutRegistry, LayoutScope, OutputInfo, Outputs, TagId}, window::{LayoutInfo, WindowId, WindowRegistry}};
+use crate::{CalloopData, config::{Action, Config, KeyPress, execute_lua_config}, layout::{Layout, MasterStack, Rect}, output::{LayoutRegistry, LayoutScope, OutputInfo, Outputs, TagId}, window::{LayoutInfo, WindowId, WindowRegistry}};
 
 pub struct Alice {
     pub start_time: std::time::Instant,
@@ -80,6 +80,14 @@ impl Alice {
         // Get the loop signal, used to stop the event loop
         let loop_signal = event_loop.get_signal();
 
+        let config = match execute_lua_config() {
+            Ok(config) => config,
+            Err(err) => {
+                eprintln!("Error while loading config: {err}");
+                Config::default()
+            }
+        };
+
         Self {
             start_time,
             display_handle: dh,
@@ -92,7 +100,7 @@ impl Alice {
             outputs: Outputs::new(),
             layout_registry: LayoutRegistry::new(),
 
-            config: Config::default(),
+            config,
 
             compositor_state,
             xdg_shell_state,
@@ -536,7 +544,14 @@ impl Alice {
     fn handle_action(&mut self, action: Action) {
         match action {
             Action::Quit => std::process::exit(0),
-            Action::ReloadConfig => {}
+            Action::ReloadConfig => {
+                match execute_lua_config() {
+                    Ok(config) => self.config = config,
+                    Err(err) => {
+                        eprintln!("Error reloading config: {err}");
+                    }
+                }
+            }
             Action::Close => {
                 let Some(info) = self.window_registry.get_focused() else {
                     return;

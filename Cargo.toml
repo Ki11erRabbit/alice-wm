@@ -6,6 +6,8 @@ edition = "2024"
 [dependencies]
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 bitflags = "2.13.1"
+xdg = "3.0.0"
+anyhow = "1.0.104"
 
 [dependencies.smithay]
 version = "0.7.0"
@@ -21,4 +23,5 @@ version = "0.12.0"
 features = [
     "vendored",
     "lua55",
+    "error-send",
 ]

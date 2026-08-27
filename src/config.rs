@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mlua::{FromLua, FromLuaMulti, Lua, MetaMethod, Table, UserData};
+use mlua::{FromLua, Lua, MetaMethod, Table, UserData};
 use smithay::input::keyboard::{Keysym, ModifiersState};
 
 use crate::output::TagId;
@@ -31,10 +31,10 @@ impl UserData for Action {
 }
 
 impl FromLua for Action {
-    fn from_lua(value: mlua::prelude::LuaValue, lua: &Lua) -> mlua::prelude::LuaResult<Self> {
+    fn from_lua(value: mlua::prelude::LuaValue, _: &Lua) -> mlua::prelude::LuaResult<Self> {
         match value {
             mlua::Value::UserData(data) => {
-                data.user_value::<Self>()
+                Ok(data.borrow::<Self>()?.clone())
             }
             _ => Err(mlua::Error::runtime("Not an Action")),
         }
@@ -56,16 +56,33 @@ impl UserData for ModMask {
         methods.add_meta_method(MetaMethod::BOr, |_, this, other: ModMask| {
             Ok(*this | other)
         });
+        methods.add_meta_method(MetaMethod::ToString, |_, this, ()| {
+            let mut string = String::new();
+            if this.contains(ModMask::Super) {
+                string.push_str("S");
+            }
+            if this.contains(ModMask::Ctrl) {
+                string.push_str("C");
+            }
+            if this.contains(ModMask::Alt) {
+                string.push_str("A");
+            }
+            if this.contains(ModMask::Shift) {
+                string.push_str("Sh");
+            }
+
+            Ok(string)
+        });
     }
 }
 
 impl FromLua for ModMask {
-    fn from_lua(value: mlua::prelude::LuaValue, lua: &Lua) -> mlua::prelude::LuaResult<Self> {
+    fn from_lua(value: mlua::prelude::LuaValue, _: &Lua) -> mlua::prelude::LuaResult<Self> {
         match value {
             mlua::Value::UserData(data) => {
-                data.user_value::<Self>()
+                Ok(*data.borrow::<Self>()?)
             }
-            _ => Err(mlua::Error::runtime("Not a modifier")),
+            x => Err(mlua::Error::runtime(format!("Not a modifier: `{}`", x.type_name()))),
         }
     }
 }
@@ -102,6 +119,18 @@ impl From<(&ModifiersState, Keysym)> for KeyPress {
 
 impl UserData for KeyPress {
 
+}
+
+impl FromLua for KeyPress {
+    fn from_lua(value: mlua::prelude::LuaValue, _: &Lua) -> mlua::prelude::LuaResult<Self> {
+        match value {
+            mlua::Value::UserData(data) => {
+                Ok(*data.borrow::<Self>()?)
+            }
+            _ => Err(mlua::Error::runtime("Not a keypress")),
+        }
+
+    }
 }
 
 pub struct Config {
@@ -379,5 +408,44 @@ fn parse_keystring(key: &str) -> mlua::Result<Keysym> {
             None => unreachable!("we already checked for at least one character"),
         };
     }
-    todo!("handle additional keysyms")
+    match key {
+        "Return" => Ok(Keysym::Return),
+        x => todo!("handle additional keysyms: {x}"),
+    }
+}
+
+
+fn load_config(file_text: &str) -> mlua::Result<Config> {
+    use std::rc::Rc;
+    use std::cell::RefCell;
+    let lua = create_lua()?;
+    let config = Rc::new(RefCell::new(Config::new()));
+
+    let config_clone = config.clone();
+
+    lua.globals().set("bind", lua.create_function_mut(move |_, (keypress, action): (KeyPress, Action)| {
+        let config = config_clone.clone();
+        let mut guard = config.borrow_mut();
+        guard.insert_keypress(keypress, action);
+        Ok(())
+    })?)?;
+
+    lua.load(file_text).exec()?;
+
+
+    Ok(config.take())
+}
+
+
+pub fn execute_lua_config() -> anyhow::Result<Config> {
+    let xdg_dirs = xdg::BaseDirectories::with_prefix("alice-wm");
+    xdg_dirs.create_config_directory("")?;
+    let config_path = match xdg_dirs.find_config_file("config.lua") {
+        Some(path) => path,
+        None => return Ok(Config::default()),
+    };
+    let string  = std::fs::read_to_string(config_path)?;
+    let config = load_config(&string)?;
+
+    Ok(config)
 }
