@@ -1,10 +1,10 @@
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::PopupSurface;
-use smithay::wayland::shell::wlr_layer::{Anchor, LayerSurfaceCachedState};
+use smithay::wayland::shell::wlr_layer::{Anchor, KeyboardInteractivity, LayerSurfaceCachedState};
 use smithay::{output::Output, wayland::shell::wlr_layer::WlrLayerShellHandler};
 use smithay::desktop::{LayerSurface as DesktopLayerSurface, layer_map_for_output};
-use smithay::utils::{Logical, Rectangle, Size};
+use smithay::utils::{Logical, Rectangle, Size, SERIAL_COUNTER};
 
 use crate::Alice;
 use crate::output::LayoutScope;
@@ -98,6 +98,16 @@ impl WlrLayerShellHandler for Alice {
         self.layer_surfaces.get_mut(&output_id)
             .map(|layers| layers.retain(|s| s.surface != surface.surface));
 
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            if keyboard.current_focus().as_ref() == Some(surface.surface.wl_surface()) {
+                let fallback = self.window_registry.get_focused()
+                    .and_then(|info| info.window.toplevel())
+                    .map(|t| t.wl_surface().clone());
+                let serial = SERIAL_COUNTER.next_serial();
+                keyboard.set_focus(self, fallback, serial);
+            }
+        }
+
         let Some(tag) = self.outputs.get_focused_tag(output_id) else {
             return;
         };
@@ -131,6 +141,23 @@ pub fn handle_commit(state: &mut Alice, surface: &WlSurface) {
         info.init_config = true;
     } else {
         drop(map);
+    }
+
+    let keyboard_interactivity = with_states(surface, |states| {
+        states
+            .cached_state
+            .get::<LayerSurfaceCachedState>()
+            .current()
+            .keyboard_interactivity
+    });
+
+    if keyboard_interactivity == KeyboardInteractivity::Exclusive {
+        if let Some(keyboard) = state.seat.get_keyboard() {
+            if keyboard.current_focus().as_ref() != Some(surface) {
+                let serial = SERIAL_COUNTER.next_serial();
+                keyboard.set_focus(state, Some(surface.clone()), serial);
+            }
+        }
     }
 
     let Some(tag) = state.outputs.get_focused_tag(output_id) else {
