@@ -91,6 +91,26 @@ impl Alice {
                         self.space.elements().for_each(|window| {
                             window.toplevel().unwrap().send_pending_configure();
                         });
+                    } else if let Some(layer) = self.layer_under(pointer.current_location()) {
+                        // A click landed on a layer-shell surface (panel, launcher, etc).
+                        // Only OnDemand surfaces should be granted keyboard focus on click;
+                        // surfaces with no keyboard interest (e.g. waybar) should just get
+                        // the button event routed to them without disturbing focus, and
+                        // Exclusive surfaces already grabbed focus on commit.
+                        let interactivity = smithay::wayland::compositor::with_states(
+                            layer.wl_surface(),
+                            |states| {
+                                states
+                                    .cached_state
+                                    .get::<smithay::wayland::shell::wlr_layer::LayerSurfaceCachedState>()
+                                    .current()
+                                    .keyboard_interactivity
+                            },
+                        );
+
+                        if interactivity == smithay::wayland::shell::wlr_layer::KeyboardInteractivity::OnDemand {
+                            keyboard.set_focus(self, Some(layer.wl_surface().clone()), serial);
+                        }
                     } else {
                         self.space.elements().for_each(|window| {
                             window.set_activated(false);

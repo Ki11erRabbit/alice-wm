@@ -163,12 +163,64 @@ impl Alice {
         socket_name
     }
 
+    pub fn layer_under(&self, pos: Point<f64, Logical>) -> Option<smithay::desktop::LayerSurface> {
+        let output = self
+            .space
+            .outputs()
+            .find(|o| {
+                self.space
+                    .output_geometry(o)
+                    .map(|geo| geo.to_f64().contains(pos))
+                    .unwrap_or(false)
+            })?;
+        let output_loc = self.space.output_geometry(output)?.loc.to_f64();
+        let layers = layer_map_for_output(output);
+        let point = pos - output_loc;
+
+        layers
+            .layer_under(wlr_layer::Layer::Overlay, point)
+            .or_else(|| layers.layer_under(wlr_layer::Layer::Top, point))
+            .or_else(|| layers.layer_under(wlr_layer::Layer::Bottom, point))
+            .or_else(|| layers.layer_under(wlr_layer::Layer::Background, point))
+            .cloned()
+    }
+
     pub fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
-        self.space.element_under(pos).and_then(|(window, location)| {
-            window
+        let output = self
+            .space
+            .outputs()
+            .find(|o| {
+                self.space
+                    .output_geometry(o)
+                    .map(|geo| geo.to_f64().contains(pos))
+                    .unwrap_or(false)
+            })?;
+        let output_loc = self.space.output_geometry(output)?.loc.to_f64();
+        let layers = layer_map_for_output(output);
+
+        let under_layer = |layer: wlr_layer::Layer| {
+            let l = layers.layer_under(layer, pos - output_loc)?;
+            let layer_loc = layers.layer_geometry(l)?.loc.to_f64();
+            l.surface_under(pos - output_loc - layer_loc, WindowSurfaceType::ALL)
+                .map(|(s, p)| (s, Point::<f64, Logical>::new(p.x as f64 + layer_loc.x as f64 + output_loc.x, (p.y as f64 + layer_loc.y as f64 + output_loc.y).into())))
+        };
+
+        // Overlay and Top surfaces (bars, launchers, notifications) sit above windows.
+        if let Some(hit) = under_layer(wlr_layer::Layer::Overlay).or_else(|| under_layer(wlr_layer::Layer::Top)) {
+            return Some(hit);
+        }
+
+        if let Some((window, location)) = self.space.element_under(pos) {
+            if let Some(hit) = window
                 .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
                 .map(|(s, p)| (s, (p + location).to_f64()))
-        })
+            {
+                return Some(hit);
+            }
+        }
+
+        // Bottom and Background surfaces (wallpapers, widgets) sit below windows.
+        under_layer(wlr_layer::Layer::Bottom).or_else(|| under_layer(wlr_layer::Layer::Background))
     }
 
     /// Pass in an scope to target only that output
