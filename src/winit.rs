@@ -83,6 +83,20 @@ pub fn init_winit(
                     )
                 });
 
+                if let Some(layers) = state.layer_surfaces.get(
+                    &state.outputs.get(&output.name()).unwrap().id
+                ) {
+                    for layer in layers {
+                        layer.surface.send_frame(
+                            &output,
+                            state.start_time.elapsed(),
+                            Some(Duration::ZERO),
+                            |_, _| Some(output.clone())
+                        );
+                    }
+
+                }
+
                 state.space.refresh();
                 state.popups.cleanup();
                 let _ = display.flush_clients();

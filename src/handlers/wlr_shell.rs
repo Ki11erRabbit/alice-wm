@@ -1,10 +1,40 @@
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::PopupSurface;
+use smithay::wayland::shell::wlr_layer::{Anchor, LayerSurfaceCachedState};
 use smithay::{output::Output, wayland::shell::wlr_layer::WlrLayerShellHandler};
 use smithay::desktop::{LayerSurface as DesktopLayerSurface, layer_map_for_output};
+use smithay::utils::{Logical, Rectangle, Size};
 
 use crate::Alice;
 use crate::output::LayoutScope;
+
+/// The wlr-layer-shell protocol expects the compositor to hint a real size on any
+/// axis the surface has anchored to both opposing edges (it needs to know how much
+/// space to fill). On an axis that isn't fully anchored, 0 tells the client "you
+/// decide" (this is how a centered, content-sized popup like wofi is meant to work).
+fn suggested_size(surface: &WlSurface, zone: Rectangle<i32, Logical>) -> Size<i32, Logical> {
+    let anchor = with_states(surface, |states| {
+        states
+            .cached_state
+            .get::<LayerSurfaceCachedState>()
+            .current()
+            .anchor
+    });
+
+    let width = if anchor.contains(Anchor::LEFT) && anchor.contains(Anchor::RIGHT) {
+        zone.size.w
+    } else {
+        0
+    };
+    let height = if anchor.contains(Anchor::TOP) && anchor.contains(Anchor::BOTTOM) {
+        zone.size.h
+    } else {
+        0
+    };
+
+    (width, height).into()
+}
 
 
 
@@ -88,11 +118,19 @@ pub fn handle_commit(state: &mut Alice, surface: &WlSurface) {
     let output = state.outputs.get_id(output_id).output.clone();
     let mut map = layer_map_for_output(&output);
     map.arrange();
-    drop(map);
 
     if !info.init_config {
+        let zone = map.non_exclusive_zone();
+        drop(map);
+
+        let size = suggested_size(info.surface.wl_surface(), zone);
+        info.surface.layer_surface().with_pending_state(|pending| {
+            pending.size = Some(size);
+        });
         info.surface.layer_surface().send_configure();
         info.init_config = true;
+    } else {
+        drop(map);
     }
 
     let Some(tag) = state.outputs.get_focused_tag(output_id) else {

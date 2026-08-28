@@ -62,6 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     state.space.map_output(&output, (0, 0));
     state.outputs.insert(output.clone());
+    output.create_global::<Alice>(&display_handle);
 
     let mut data = CalloopData {
         state,
