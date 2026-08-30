@@ -220,7 +220,7 @@ pub fn device_added(
     let render_node = node
         .node_with_type(NodeType::Render)
         .and_then(|r| r.ok())
-        .unwrap_or(node);
+        .unwrap_or(alice.backend_data.primary_gpu);
 
     if let Err(err) = alice.backend_data.gpus.as_mut().add_node(render_node, gbm.clone()) {
         eprintln!("Failed to add render node {:?}: {}", render_node, err);
