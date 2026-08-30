@@ -3,7 +3,7 @@ use std::{collections::HashMap, os::unix::raw::dev_t, path::Path, time::Duration
 use smithay::{
     backend::{
         allocator::{
-            Fourcc, gbm::{GbmAllocator, GbmBufferFlags, GbmDevice}
+            Fourcc, dmabuf::Dmabuf, gbm::{GbmAllocator, GbmBufferFlags, GbmDevice}
         },
         drm::{
             DrmDevice, DrmDeviceFd, DrmEvent, DrmEventMetadata, DrmNode, NodeType, compositor::FrameFlags, exporter::gbm::GbmFramebufferExporter, output::{DrmOutput, DrmOutputManager, DrmOutputRenderElements}
@@ -11,10 +11,7 @@ use smithay::{
         input::InputEvent,
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
-            damage::OutputDamageTracker,
-            element::{AsRenderElements, surface::WaylandSurfaceRenderElement},
-            gles::GlesRenderer,
-            multigpu::{GpuManager, MultiRenderer, gbm::GbmGlesBackend},
+            ImportDma, damage::OutputDamageTracker, element::{AsRenderElements, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer, multigpu::{GpuManager, MultiRenderer, gbm::GbmGlesBackend}
         },
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{UdevBackend, UdevEvent, primary_gpu},
@@ -28,7 +25,7 @@ use smithay::{
         rustix::fs::OFlags,
         wayland_server::Display,
     },
-    utils::DeviceFd,
+    utils::DeviceFd, wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
 };
 use smithay::desktop::space::OutputError;
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
@@ -77,6 +74,7 @@ pub struct UdevData {
     /// DCP) borrow from here instead of opening a second fd on the same GPU.
     pub render_gbm_devices: HashMap<DrmNode, GbmDevice<DrmDeviceFd>>,
     pub keyboards: Vec<smithay::reexports::input::Device>,
+    pub dmabuf_state: Option<(DmabufState, DmabufGlobal)>,
 }
 
 /// A KMS-capable device whose `DrmDevice` is already open, but which is
@@ -128,6 +126,7 @@ impl Backend for UdevData {
             backends: HashMap::new(),
             render_gbm_devices: HashMap::new(),
             keyboards: Vec::with_capacity(1),
+            dmabuf_state: None,
         };
 
         let display: Display<Alice<Self>> = Display::new()?;
@@ -156,6 +155,18 @@ impl Backend for UdevData {
                 Err(err) => eprintln!("Failed to finish display device {:?}: {}", node, err),
             }
         }
+        let dmabuf_formats = alice
+            .backend_data
+            .gpus
+            .single_renderer(&alice.backend_data.primary_gpu)?
+            .dmabuf_formats();
+        let default_feedback = DmabufFeedbackBuilder::new(alice.backend_data.primary_gpu.dev_id(), dmabuf_formats)
+            .build()
+            .unwrap();
+        let mut dmabuf_state = DmabufState::new();
+        let global = dmabuf_state
+            .create_global_with_default_feedback::<Alice<UdevData>>(&display_handle, &default_feedback);
+        alice.backend_data.dmabuf_state = Some((dmabuf_state, global));
 
         // A LoopHandle is cheaply Clone — capture our own clone into the
         // closure so it's usable for the lifetime of the callback without
@@ -632,4 +643,24 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     let _ = alice.display_handle.flush_clients();
 }
 
+impl DmabufHandler for Alice<UdevData> {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.backend_data.dmabuf_state.as_mut().unwrap().0
+    }
 
+    fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
+        if self
+            .backend_data
+            .gpus
+            .single_renderer(&self.backend_data.primary_gpu)
+            .and_then(|mut renderer| renderer.import_dmabuf(&dmabuf, None))
+            .is_ok()
+        {
+            let _ = notifier.successful::<Alice<UdevData>>();
+        } else {
+            notifier.failed();
+        }
+    }
+}
+
+smithay::delegate_dmabuf!(Alice<UdevData>);

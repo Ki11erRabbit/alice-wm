@@ -75,6 +75,7 @@ impl<BackendData: Backend + 'static> XdgShellHandler for Alice<BackendData> {
 
         // TODO: this should probably only be the output the window is on.
         self.relayout(None);
+        BackendData::schedule_render(self);
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
