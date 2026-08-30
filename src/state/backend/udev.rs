@@ -308,14 +308,21 @@ pub fn device_added(
         }
         Err(_) => {
             // No KMS capability (e.g. AGX) — that's fine if it can still render.
-            // Open a GbmDevice on it directly and stash it for display-only
-            // devices to borrow, instead of giving up on this GPU entirely.
             let gbm = GbmDevice::new(fd)?;
-            if let Err(err) = alice.backend_data.gpus.as_mut().add_node(node, gbm.clone()) {
-                eprintln!("Failed to add render-only node {:?}: {}", node, err);
+
+            // Key by the *render*-type node, so this matches what primary_gpu
+            // (also render-type) resolves to, and what display-only devices
+            // will look up later.
+            let render_node = node
+                .node_with_type(NodeType::Render)
+                .and_then(|r| r.ok())
+                .unwrap_or(node);
+
+            if let Err(err) = alice.backend_data.gpus.as_mut().add_node(render_node, gbm.clone()) {
+                eprintln!("Failed to add render-only node {:?}: {}", render_node, err);
             }
-            alice.backend_data.render_gbm_devices.insert(node, gbm);
-            eprintln!("Registered {:?} as a render-only GPU (no display outputs)", node);
+            alice.backend_data.render_gbm_devices.insert(render_node, gbm);
+            eprintln!("Registered {:?} as a render-only GPU (no display outputs)", render_node);
             Ok(())
         }
     }
