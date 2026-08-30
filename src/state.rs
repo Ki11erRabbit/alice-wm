@@ -167,6 +167,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     unsafe {
                         display.get_mut().dispatch_clients(&mut state.state).unwrap();
                     }
+                    let _ = state.display_handle.flush_clients();
                     Ok(PostAction::Continue)
                 },
             )
