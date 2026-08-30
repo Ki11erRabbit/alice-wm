@@ -384,8 +384,10 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
     pub fn focus_window(&mut self, window: Window) {
         let Some(id) = self.window_registry.find(window.clone()) else {
+            eprintln!("focus_window: window not found in registry");
             return;
         };
+        eprintln!("focus_window: focusing {:?}", id.0);
         self.change_focus(id, window.clone());
     }
 
