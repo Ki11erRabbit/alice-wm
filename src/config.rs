@@ -511,6 +511,9 @@ fn parse_keystring(key: &str) -> mlua::Result<Keysym> {
         "Right" => Ok(Keysym::Right),
         "Up" => Ok(Keysym::Up),
         "Down" => Ok(Keysym::Down),
+        "XF86AudioRaiseVolume" => Ok(Keysym::XF86_AudioRaiseVolume),
+        "XF86AudioLowerVolume" => Ok(Keysym::XF86_AudioLowerVolume),
+        "XF86AudioMute" => Ok(Keysym::XF86_AudioMute),
         x => todo!("handle additional keysyms: {x}"),
     }
 }
