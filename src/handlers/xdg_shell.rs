@@ -35,13 +35,17 @@ impl<BackendData: Backend + 'static> XdgShellHandler for Alice<BackendData> {
         let pointer_loc = self.seat.get_pointer().unwrap()
             .current_location();
 
-        let Some(output) = self.space.output_under(pointer_loc).next() else {
-            return;
-        };
-
-        let info = match self.outputs.get(&output.name()) {
-            Some(output) => output,
-            None => self.outputs.get_focused(),
+        let info = match self.space.output_under(pointer_loc).next() {
+            Some(output) => {
+                let info = match self.outputs.get(&output.name()) {
+                    Some(output) => output,
+                    None => self.outputs.get_focused(),
+                };
+                info
+            }
+            None => {
+                self.outputs.get_focused()
+            }
         };
         let output = info.id;
         let focused_tag = match self.outputs.get_focused_tag(info.id) {
