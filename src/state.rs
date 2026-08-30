@@ -390,10 +390,8 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
     pub fn focus_window(&mut self, window: Window) {
         let Some(id) = self.window_registry.find(window.clone()) else {
-            eprintln!("focus_window: window not found in registry");
             return;
         };
-        eprintln!("focus_window: focusing {:?}", id.0);
         self.change_focus(id, window.clone());
     }
 
@@ -540,14 +538,14 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         })?;
 
         stack.remove_window(id);
-        self.window_registry.stack_entry(LayoutScope {
-            output,
-            tag,
-        })
-        .and_modify(|stack| {
-            stack.push(id);
-        })
-        .or_insert(LayoutInfo::new(vec![id]));
+        self.window_registry.stack_entry(LayoutScope { output, tag })
+            .and_modify(|stack| { stack.push(id); })
+            .or_insert(LayoutInfo::new(vec![id]));
+
+        // Keep the window's own metadata in sync with which stack it now lives in.
+        if let Some(window_info) = self.window_registry.get_mut(&id) {
+            window_info.tag = tag;
+        }
 
         self.change_tag(tag)?;
         Some(())
