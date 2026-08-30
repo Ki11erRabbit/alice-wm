@@ -383,9 +383,35 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             return;
         };
 
-        self.window_registry.remove(id);
+        let was_focused = self.window_registry.focused_window() == Some(id);
+        let scope_info = self.window_registry.get(&id).map(|i| (i.output, i.tag));
 
+        self.window_registry.remove(id);
         self.space.unmap_elem(&window);
+
+        if !was_focused {
+            return;
+        }
+
+        // Try to hand focus to whatever's next on the same output/tag.
+        if let Some((output, tag)) = scope_info {
+            let next = self.window_registry
+                .get_stack_mut(&LayoutScope { output, tag })
+                .and_then(|s| s.focused());
+
+            if let Some(next_id) = next {
+                if let Some(next_window) = self.window_registry.get(&next_id).map(|i| i.window.clone()) {
+                    self.change_focus(next_id, next_window);
+                    return;
+                }
+            }
+        }
+
+        // Nothing left to focus on this scope — explicitly release keyboard focus
+        // instead of leaving it dangling on the surface we just destroyed.
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let serial = SERIAL_COUNTER.next_serial();
+        keyboard.set_focus(self, Option::<WlSurface>::None, serial);
     }
 
     pub fn focus_window(&mut self, window: Window) {
@@ -502,32 +528,26 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
     pub fn change_tag(&mut self, tag: TagId) -> Option<()> {
         let old_tag = self.outputs.current_focused_tag()?;
-        eprintln!("change_tag: old_tag={} requested_new_tag={}", old_tag.0, tag.0);
+        let output = self.outputs.get_focused().id;
 
-        for id in self.window_registry.filter(&LayoutScope {
-            output: self.outputs.get_focused().id,
-            tag: old_tag,
-        }) {
-            let window = self.window_registry.get(&id)?;
-            self.space.unmap_elem(&window.window);
+        for id in self.window_registry.filter(&LayoutScope { output, tag: old_tag }) {
+            if let Some(window) = self.window_registry.get(&id) {
+                self.space.unmap_elem(&window.window);
+            }
         }
-        let mut no_windows = true;
-        for id in self.window_registry.filter(&LayoutScope {
-            output: self.outputs.get_focused().id,
-            tag,
-        }) {
-            no_windows = false;
-            let window = self.window_registry.get(&id)?;
-            self.space.map_element(window.window.clone(), (0,0), false);
+        for id in self.window_registry.filter(&LayoutScope { output, tag }) {
+            if let Some(window) = self.window_registry.get(&id) {
+                self.space.map_element(window.window.clone(), (0, 0), false);
+            }
         }
         self.outputs.change_tag(tag);
-        if no_windows == true {
-            self.window_registry.change_focus(None);
-        }
-        self.relayout(Some(LayoutScope {
-            output: self.outputs.get_focused().id,
-            tag,
-        }));
+
+        let new_focus = self.window_registry
+            .get_stack_mut(&LayoutScope { output, tag })
+            .and_then(|s| s.focused());
+        self.window_registry.change_focus(new_focus);
+
+        self.relayout(Some(LayoutScope { output, tag }));
         Some(())
     }
 

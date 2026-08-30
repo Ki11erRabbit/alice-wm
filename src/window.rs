@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use smithay::desktop::Window;
+use smithay::{desktop::Window, reexports::wayland_server::protocol::wl_surface::WlSurface};
 
 use crate::output::{LayoutScope, OutputId, TagId};
 
@@ -134,7 +134,6 @@ impl LayoutInfo {
             }
         }
     }
-
 }
 
 pub struct WindowRegistry {
@@ -256,4 +255,11 @@ impl WindowRegistry {
     pub fn focused_window(&self) -> Option<WindowId> {
         self.focused_window
     }
+
+    pub fn find_by_surface(&self, surface: &WlSurface) -> Option<WindowId> {
+        self.map.iter()
+            .find(|(_, info)| info.window.toplevel().map(|t| t.wl_surface()) == Some(surface))
+            .map(|(id, _)| *id)
+    }
+
 }
