@@ -330,6 +330,9 @@ fn create_lua() -> mlua::Result<Lua> {
     action_table.set("quit", lua.create_function(|_, _: ()| {
         Ok(Action::Quit)
     })?)?;
+    action_table.set("close", lua.create_function(|_, _: ()| {
+        Ok(Action::Close)
+    })?)?;
     action_table.set("reload_config", lua.create_function(|_, _: ()| {
         Ok(Action::ReloadConfig)
     })?)?;
