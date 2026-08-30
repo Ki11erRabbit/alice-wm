@@ -3,30 +3,26 @@ use std::{collections::HashMap, os::unix::raw::dev_t, path::Path, time::Duration
 use smithay::{
     backend::{
         allocator::{
-            gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
-            Fourcc,
+            Fourcc, gbm::{GbmAllocator, GbmBufferFlags, GbmDevice}
         },
         drm::{
-            compositor::FrameFlags,
-            exporter::gbm::GbmFramebufferExporter,
-            output::{DrmOutput, DrmOutputManager},
-            DrmDevice, DrmDeviceFd, DrmEvent, DrmEventMetadata, DrmNode, NodeType,
+            DrmDevice, DrmDeviceFd, DrmEvent, DrmEventMetadata, DrmNode, NodeType, compositor::FrameFlags, exporter::gbm::GbmFramebufferExporter, output::{DrmOutput, DrmOutputManager, DrmOutputRenderElements}
         },
-        input::{InputEvent},
+        input::InputEvent,
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
             damage::OutputDamageTracker,
             element::surface::WaylandSurfaceRenderElement,
             gles::GlesRenderer,
-            multigpu::{gbm::GbmGlesBackend, GpuManager},
+            multigpu::{GpuManager, gbm::GbmGlesBackend},
         },
-        session::{libseat::LibSeatSession, Event as SessionEvent, Session},
-        udev::{primary_gpu, UdevBackend, UdevEvent},
+        session::{Event as SessionEvent, Session, libseat::LibSeatSession},
+        udev::{UdevBackend, UdevEvent, primary_gpu},
     },
     output::{Mode as WlMode, Output, PhysicalProperties, Subpixel},
     reexports::{
         calloop::{EventLoop, LoopHandle},
-        drm::control::{connector, crtc, ModeTypeFlags},
+        drm::control::{ModeTypeFlags, connector, crtc},
         input::Libinput,
         rustix::fs::OFlags,
         wayland_server::Display,
@@ -43,6 +39,14 @@ type UdevRenderer<'a> = smithay::backend::renderer::multigpu::MultiRenderer<
     GbmGlesBackend<GlesRenderer, DrmDeviceFd>,
     GbmGlesBackend<GlesRenderer, DrmDeviceFd>,
 >;
+
+use smithay::{
+    backend::renderer::element::AsRenderElements,
+    desktop::{space::SpaceRenderElements, Window},
+};
+
+type UdevRenderElement<'a> =
+    SpaceRenderElements<UdevRenderer<'a>, <Window as AsRenderElements<UdevRenderer<'a>>>::RenderElement>;
 
 pub struct GpuBackendData {
     pub drm_output_manager:
@@ -358,7 +362,7 @@ fn connector_connected(alice: &mut Alice<UdevData>, node: DrmNode, connector: co
         &output,
         None,
         &mut renderer,
-        empty_elements,
+        &DrmOutputRenderElements::<UdevRenderer<'_>, UdevRenderElement<'_>>::default(),
     ) {
         Ok(drm_output) => {
             backend.surfaces.insert(
@@ -424,6 +428,8 @@ pub fn frame_finish(
     render_surface(alice, node, crtc);
 }
 
+use smithay::desktop::space::OutputError;
+
 fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle) {
     let Some(render_node) = alice.backend_data.backends.get(&node).and_then(|b| b.render_node) else {
         return;
@@ -445,26 +451,17 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     };
     let output = surface.output.clone();
 
-    let render_result = smithay::desktop::space::render_output::<
-        _,
-        WaylandSurfaceRenderElement<_>,
-        _,
-        _,
-    >(
-        &output,
-        &mut renderer,
-        1.0,
-        0,
-        [&alice.space],
-        &[],
-        &mut surface.damage_tracker,
-        [0.1, 0.1, 0.1, 1.0],
-    );
-
-    let elements = match render_result {
-        Ok(res) => res,
+    // No explicit type annotation needed — inferred from `renderer`'s concrete
+    // type and `alice.space: Space<Window>`. `alpha` here is opacity (1.0 =
+    // fully opaque), not a scale factor.
+    let elements = match alice.space.render_elements_for_output(&mut renderer, &output, 1.0) {
+        Ok(elements) => elements,
+        Err(OutputError::Unmapped) => {
+            // Output isn't mapped into the space yet/anymore — nothing to draw.
+            return;
+        }
         Err(err) => {
-            eprintln!("Render error on crtc {:?}: {:?}", crtc, err);
+            eprintln!("Failed to gather render elements for {:?}: {:?}", output.name(), err);
             return;
         }
     };
