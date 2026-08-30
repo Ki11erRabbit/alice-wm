@@ -62,6 +62,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     },
                 );
                 pointer.frame(self);
+                Backend::schedule_render(self);
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let output = self.space.outputs().next().unwrap();
@@ -91,6 +92,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     },
                 );
                 pointer.frame(self);
+                Backend::schedule_render(self);
             }
             InputEvent::PointerButton { event, .. } => {
                 let pointer = self.seat.get_pointer().unwrap();

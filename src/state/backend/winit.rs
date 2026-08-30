@@ -1,7 +1,7 @@
 
 use std::time::Duration;
 
-use smithay::{backend::{drm::{DrmNode, NodeType}, input::{DeviceCapability, InputEvent}, libinput::{LibinputInputBackend, LibinputSessionInterface}, renderer::{damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement, gles::GlesRenderer}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, primary_gpu}, winit::{self, WinitEvent, WinitGraphicsBackend}}, output::{Mode, Output, PhysicalProperties, Scale, Subpixel}, reexports::{
+use smithay::{backend::{drm::{DrmNode, NodeType}, input::{DeviceCapability, InputEvent}, libinput::{LibinputInputBackend, LibinputSessionInterface}, renderer::{damage::OutputDamageTracker, gles::GlesRenderer}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, primary_gpu}, winit::{self, WinitEvent, WinitGraphicsBackend}}, output::{Mode, Output, PhysicalProperties, Scale, Subpixel}, reexports::{
     calloop::EventLoop, input::Libinput, wayland_server::{Display, DisplayHandle, protocol::wl_surface}
 }, utils::{Rectangle, Transform}};
 use crate::{Alice, CalloopData, state::backend::Backend};
@@ -12,6 +12,7 @@ use crate::{Alice, CalloopData, state::backend::Backend};
 pub struct WinitData {
     pub backend: WinitGraphicsBackend<GlesRenderer>,
     pub damage_tracker: OutputDamageTracker,
+    pub pointer_element: crate::cursor::PointerElement,
 }
 
 
@@ -53,6 +54,7 @@ impl Backend for WinitData {
         let backend_data = WinitData {
             backend,
             damage_tracker,
+            pointer_element: crate::cursor::PointerElement::default(),
         };
 
 
@@ -93,14 +95,33 @@ impl Backend for WinitData {
                 }
                 WinitEvent::Input(event) => state.process_input_event(event),
                 WinitEvent::Redraw => {
+                    crate::cursor::reset_cursor_if_dead(&mut state.cursor_status);
+
+                    let output_geo = state.space.output_geometry(&output).unwrap();
+                    let output_scale =
+                        smithay::utils::Scale::from(output.current_scale().fractional_scale());
+                    let cursor_pos = state.seat.get_pointer().unwrap().current_location()
+                        - output_geo.loc.to_f64();
+                    let cursor_status = state.cursor_status.clone();
+
                     let size = state.backend_data.backend.window_size();
                     let damage = Rectangle::from_size(size);
 
                     {
                         let (renderer, mut framebuffer) = state.backend_data.backend.bind().unwrap();
+
+                        let cursor_elements: Vec<crate::cursor::PointerRenderElement<GlesRenderer>> =
+                            crate::cursor::cursor_render_elements(
+                                &mut state.backend_data.pointer_element,
+                                &cursor_status,
+                                renderer,
+                                cursor_pos,
+                                output_scale,
+                            );
+
                         smithay::desktop::space::render_output::<
                             _,
-                            WaylandSurfaceRenderElement<GlesRenderer>,
+                            crate::cursor::PointerRenderElement<GlesRenderer>,
                             _,
                             _,
                         >(
@@ -110,7 +131,7 @@ impl Backend for WinitData {
                             1.0,
                             0,
                             [&state.space],
-                            &[],
+                            &cursor_elements,
                             &mut state.backend_data.damage_tracker,
                             [0.1, 0.1, 0.1, 1.0],
                         )

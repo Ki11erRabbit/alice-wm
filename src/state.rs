@@ -48,6 +48,10 @@ pub struct Alice<BackendData: Backend + 'static> {
     pub popups: PopupManager,
 
     pub seat: Seat<Self>,
+
+    /// What the pointer cursor should currently look like, as last reported
+    /// by the seat (default arrow, hidden, or a client-provided surface).
+    pub cursor_status: smithay::input::pointer::CursorImageStatus,
 }
 
 impl<BackendData: Backend + 'static> Alice<BackendData> {
@@ -128,6 +132,8 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             data_device_state,
             popups,
             seat,
+
+            cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
         }
     }
 

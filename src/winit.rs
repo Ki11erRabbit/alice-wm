@@ -24,7 +24,11 @@ pub fn init_winit(
 
     let (mut backend, winit) = winit::init()?;
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
-    state.backend_data = WinitData { backend, damage_tracker };
+    state.backend_data = WinitData {
+        backend,
+        damage_tracker,
+        pointer_element: crate::cursor::PointerElement::default(),
+    };
 
     unsafe {
         std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);

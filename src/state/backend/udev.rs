@@ -50,6 +50,14 @@ type UdevRenderer<'a> = MultiRenderer<
 type UdevRenderElement<'a> =
     SpaceRenderElements<UdevRenderer<'a>, <Window as AsRenderElements<UdevRenderer<'a>>>::RenderElement>;
 
+/// Everything actually handed to the DRM compositor for a frame: the
+/// space's contents plus the software cursor drawn on top.
+smithay::backend::renderer::element::render_elements! {
+    UdevFrameRenderElement<='a, UdevRenderer<'a>>;
+    Space=UdevRenderElement<'a>,
+    Cursor=crate::cursor::PointerRenderElement<UdevRenderer<'a>>,
+}
+
 pub struct GpuBackendData {
     pub drm_output_manager:
         DrmOutputManager<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>,
@@ -75,6 +83,7 @@ pub struct UdevData {
     pub render_gbm_devices: HashMap<DrmNode, GbmDevice<DrmDeviceFd>>,
     pub keyboards: Vec<smithay::reexports::input::Device>,
     pub dmabuf_state: Option<(DmabufState, DmabufGlobal)>,
+    pub pointer_element: crate::cursor::PointerElement,
 }
 
 /// A KMS-capable device whose `DrmDevice` is already open, but which is
@@ -127,6 +136,7 @@ impl Backend for UdevData {
             render_gbm_devices: HashMap::new(),
             keyboards: Vec::with_capacity(1),
             dmabuf_state: None,
+            pointer_element: crate::cursor::PointerElement::default(),
         };
 
         let display: Display<Alice<Self>> = Display::new()?;
@@ -638,7 +648,7 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     };
     let output = surface.output.clone();
 
-    let elements: Vec<UdevRenderElement<'_>> =
+    let space_elements: Vec<UdevRenderElement<'_>> =
         match alice.space.render_elements_for_output(&mut renderer, &output, 1.0) {
             Ok(elements) => elements,
             Err(OutputError::Unmapped) => return,
@@ -647,6 +657,27 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
                 return;
             }
         };
+
+    crate::cursor::reset_cursor_if_dead(&mut alice.cursor_status);
+    let output_geo = alice.space.output_geometry(&output).unwrap();
+    let output_scale = smithay::utils::Scale::from(output.current_scale().fractional_scale());
+    let cursor_status = alice.cursor_status.clone();
+    let cursor_pos = alice.seat.get_pointer().unwrap().current_location() - output_geo.loc.to_f64();
+
+    let cursor_elements: Vec<crate::cursor::PointerRenderElement<UdevRenderer<'_>>> =
+        crate::cursor::cursor_render_elements(
+            &mut alice.backend_data.pointer_element,
+            &cursor_status,
+            &mut renderer,
+            cursor_pos,
+            output_scale,
+        );
+
+    let elements: Vec<UdevFrameRenderElement<'_>> = cursor_elements
+        .into_iter()
+        .map(UdevFrameRenderElement::Cursor)
+        .chain(space_elements.into_iter().map(UdevFrameRenderElement::Space))
+        .collect();
 
     match surface
         .drm_output
