@@ -395,7 +395,7 @@ pub fn device_changed(alice: &mut Alice<UdevData>, event_loop: &LoopHandle<'stat
     for event in scan_events {
         match event {
             DrmScanEvent::Connected { connector, crtc: Some(crtc) } => {
-                connector_connected(alice, node, connector, crtc);
+                connector_connected(alice, event_loop, node, connector, crtc);
             }
             DrmScanEvent::Disconnected { connector, crtc: Some(crtc) } => {
                 connector_disconnected(alice, node, connector, crtc);
@@ -403,10 +403,14 @@ pub fn device_changed(alice: &mut Alice<UdevData>, event_loop: &LoopHandle<'stat
             _ => {}
         }
     }
-    let _ = event_loop;
 }
 
-fn connector_connected(alice: &mut Alice<UdevData>, node: DrmNode, connector: connector::Info, crtc: crtc::Handle) {
+fn connector_connected(
+    alice: &mut Alice<UdevData>,
+    event_loop: &LoopHandle<'static, CalloopData<UdevData>>,
+    node: DrmNode,
+    connector: connector::Info,
+    crtc: crtc::Handle) {
     let mode = connector
         .modes()
         .iter()
@@ -482,7 +486,13 @@ fn connector_connected(alice: &mut Alice<UdevData>, node: DrmNode, connector: co
                 },
             );
             drop(renderer);
-            render_surface(alice, node, crtc);
+            // Defer the first frame instead of rendering inline: give the
+            // event loop a chance to dispatch the modeset commit's
+            // completion event first, so the CRTC isn't still "busy" when
+            // we submit the first real page flip.
+            event_loop.insert_idle(move |data| {
+                render_surface(&mut data.state, node, crtc);
+            });
         }
         Err(err) => {
             eprintln!("Failed to initialize output on crtc {:?}: {}", crtc, err);
