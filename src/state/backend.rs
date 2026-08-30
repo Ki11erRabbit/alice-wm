@@ -16,5 +16,6 @@ pub trait Backend: Sized {
     fn reset_buffers(&mut self, output: &Output);
     fn early_import(&mut self, surface: &wl_surface::WlSurface);
     fn update_led_state(&mut self, led_state: LedState);
+    fn schedule_render(alice: &mut crate::Alice<Self>);
 }
 

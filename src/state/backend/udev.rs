@@ -247,6 +247,18 @@ impl Backend for UdevData {
     fn reset_buffers(&mut self, _output: &Output) {}
     fn early_import(&mut self, _surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {}
     fn update_led_state(&mut self, _led_state: smithay::input::keyboard::LedState) {}
+
+    fn schedule_render(alice: &mut Alice<Self>) {
+        let targets: Vec<(DrmNode, crtc::Handle)> = alice
+            .backend_data
+            .backends
+            .iter()
+            .flat_map(|(node, backend)| backend.surfaces.keys().map(move |crtc| (*node, *crtc)))
+            .collect();
+        for (node, crtc) in targets {
+            render_surface(alice, node, crtc);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -619,3 +631,5 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     alice.popups.cleanup();
     let _ = alice.display_handle.flush_clients();
 }
+
+

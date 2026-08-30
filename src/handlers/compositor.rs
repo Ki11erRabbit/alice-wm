@@ -46,6 +46,8 @@ impl<BackendData: Backend + 'static> CompositorHandler for Alice<BackendData> {
         xdg_shell::handle_commit(&mut self.popups, &self.space, surface);
         resize_grab::handle_commit(&mut self.space, surface);
         wlr_shell::handle_commit(self, surface);
+
+        BackendData::schedule_render(self);
     }
 }
 

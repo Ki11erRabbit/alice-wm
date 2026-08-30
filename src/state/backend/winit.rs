@@ -170,4 +170,8 @@ impl Backend for WinitData {
     fn update_led_state(&mut self, _led_state: smithay::input::keyboard::LedState) {
 
     }
+
+    fn schedule_render(_alice: &mut crate::Alice<Self>) {
+
+    }
 }
