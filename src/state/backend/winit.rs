@@ -19,7 +19,7 @@ impl Backend for WinitData {
     const HAS_RELATIVE_MOTION: bool =  false;
     const HAS_GESTURES: bool =  false;
 
-    fn setup(event_loop: &mut EventLoop<CalloopData<Self>>) -> Result<CalloopData<Self>, Box<dyn std::error::Error>> {
+    fn setup(event_loop: &mut EventLoop<'static, CalloopData<Self>>) -> Result<CalloopData<Self>, Box<dyn std::error::Error>> {
 
         let output = Output::new(
             "output-0".into(),

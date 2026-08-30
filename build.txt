@@ -1,16 +1,4 @@
    Compiling alice-wm v0.1.0 (/home/ki11errabbit/Projects/Programming-Projects/Rust/alice-wm)
-error: expected identifier, found reserved identifier `_`
-   --> src/state/backend/udev.rs:442:9
-    |
-442 |         _,
-    |         ^ expected identifier, found reserved identifier
-
-error: expected one of `!`, `.`, `::`, `;`, `?`, `else`, `{`, or an operator, found `,`
-   --> src/state/backend/udev.rs:442:10
-    |
-442 |         _,
-    |          ^ expected one of 8 possible tokens
-
 warning: unused import: `winit::WinitData`
  --> src/handlers/compositor.rs:1:80
   |
@@ -63,33 +51,6 @@ warning: unused imports: `DeviceCapability`, `DisplayHandle`, `DrmNode`, `InputE
 5 | ...p, input::Libinput, wayland_server::{Display, DisplayHandle, protocol::wl_surface}
   |       ^^^^^^^^^^^^^^^                            ^^^^^^^^^^^^^
 
-warning: unused import: `time::Duration`
- --> src/state/backend/udev.rs:1:67
-  |
-1 | use std::{collections::HashMap, os::unix::raw::dev_t, path::Path, time::Duration};
-  |                                                                   ^^^^^^^^^^^^^^
-
-warning: unused imports: `compositor::FrameFlags` and `element::surface::WaylandSurfaceRenderElement`
-  --> src/state/backend/udev.rs:10:13
-   |
-10 |             compositor::FrameFlags,
-   |             ^^^^^^^^^^^^^^^^^^^^^^
-...
-19 |             element::surface::WaylandSurfaceRenderElement,
-   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-warning: unused import: `Display`
- --> src/state/backend.rs:4:107
-  |
-4 | ...reexports::{calloop::EventLoop, wayland_server::{Display, protocol::wl_surface}}};
-  |                                                     ^^^^^^^
-
-warning: unused import: `Alice`
- --> src/state/backend.rs:6:13
-  |
-6 | use crate::{Alice, CalloopData};
-  |             ^^^^^
-
 warning: unused imports: `AsRenderElements`, `RenderElement`, `Renderer`, and `space::space_render_elements`
  --> src/state.rs:6:25
   |
@@ -124,12 +85,6 @@ warning: unused imports: `DeviceCapability`, `Display`, `DrmNode`, `InputEvent`,
 17 | }, utils::Transform};
    |    ^^^^^^^^^^^^^^^^
 
-warning: unused import: `smithay::backend::session::Event as SessionEvent`
-  --> src/main.rs:29:9
-   |
-29 |     use smithay::backend::session::Event as SessionEvent;
-   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
 warning: use of deprecated type alias `std::os::unix::raw::dev_t`: these type aliases are no longer supported by the standard library, the `libc` crate on crates.io should be used instead for the correct definitions
  --> src/state/backend/udev.rs:1:48
   |
@@ -139,9 +94,9 @@ warning: use of deprecated type alias `std::os::unix::raw::dev_t`: these type al
   = note: `#[warn(deprecated)]` on by default
 
 warning: use of deprecated type alias `std::os::unix::raw::dev_t`: these type aliases are no longer supported by the standard library, the `libc` crate on crates.io should be used instead for the correct definitions
-   --> src/state/backend/udev.rs:194:16
+   --> src/state/backend/udev.rs:201:16
     |
-194 |     device_id: dev_t,
+201 |     device_id: dev_t,
     |                ^^^^^
 
 warning: unreachable statement
@@ -174,36 +129,84 @@ warning: unreachable statement
 125 |         let seat = Seat::from_resource(&seat).unwrap();
     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
 
-error[E0283]: type annotations needed
-   --> src/state/backend/udev.rs:354:9
+error[E0308]: mismatched types
+   --> src/state/backend/udev.rs:361:9
     |
-347 |     match backend.drm_output_manager.initialize_output(
-    |                                      ----------------- required by a bound introduced by this call
+354 |     match backend.drm_output_manager.initialize_output(
+    |                                      ----------------- arguments to this method are incorrect
 ...
-354 |         &Default::default(),
-    |         ^^^^^^^^^^^^^^^^^^^ cannot infer type for type parameter `E` declared on the method `initialize_output`
+361 |         empty_elements,
+    |         ^^^^^^^^^^^^^^ expected `&DrmOutputRenderElements<..., _>`, found `&[WaylandSurfaceRenderElement<...>]`
     |
-    = note: the type must implement `RenderElement<MultiRenderer<'_, '_, ..., ...>>`
-    = help: the following types implement trait `RenderElement<R>`:
-              `&E` implements `RenderElement<R>`
-              `CropRenderElement<E>` implements `RenderElement<R>`
-              `MemoryRenderBufferRenderElement<R>` implements `RenderElement<R>`
-              `PixelShaderElement` implements `RenderElement<GlesRenderer>`
-              `RelocateRenderElement<E>` implements `RenderElement<R>`
-              `RescaleRenderElement<E>` implements `RenderElement<R>`
-              `SolidColorRenderElement` implements `RenderElement<R>`
-              `SpaceRenderElements<R, E>` implements `RenderElement<R>`
-            and 7 others
-note: required by a bound in `DrmOutputManager::<A, F, U, G>::initialize_output`
-   --> /home/ki11errabbit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/backend/drm/output.rs:230:12
+    = note: expected reference `&DrmOutputRenderElements<MultiRenderer<'_, '_, GbmGlesBackend<GlesRenderer, DrmDeviceFd>, GbmGlesBackend<GlesRenderer, DrmDeviceFd>>, _>`
+               found reference `&[WaylandSurfaceRenderElement<MultiRenderer<'_, '_, GbmGlesBackend<GlesRenderer, DrmDeviceFd>, GbmGlesBackend<GlesRenderer, DrmDeviceFd>>>]`
+note: method defined here
+   --> /home/ki11errabbit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/backend/drm/output.rs:219:12
     |
 219 |     pub fn initialize_output<R, E>(
-    |            ----------------- required by a bound in this associated function
+    |            ^^^^^^^^^^^^^^^^^
+
+error[E0061]: this function takes 9 arguments but 8 arguments were supplied
+   --> src/state/backend/udev.rs:448:25
+    |
+448 |       let render_result = smithay::desktop::space::render_output::<
+    |  _________________________^
+449 | |         _,
+450 | |         WaylandSurfaceRenderElement<_>,
+451 | |         _,
+452 | |         _,
+453 | |     >(
+    | |_____^
 ...
-230 |         E: RenderElement<R>,
-    |            ^^^^^^^^^^^^^^^^ required by this bound in `DrmOutputManager::<A, F, U, G>::initialize_output`
-    = note: the full name for the type has been written to '/home/ki11errabbit/Projects/Programming-Projects/Rust/alice-wm/target/debug/deps/alice_wm-04d46aca57f666b5.long-type-15242303719291016230.txt'
-    = note: consider using `--verbose` to print the full type name to the console
+456 |           1.0,
+    |           --- argument #3 of type `&mut MultiFramebuffer<'_, GbmGlesBackend<GlesRenderer, DrmDeviceFd>, GbmGlesBackend<GlesRenderer, DrmDeviceFd>>` is missing
+457 |           0,
+458 |           [&alice.space],
+    |           -------------- expected `&mut OutputDamageTracker`, found `[&smithay::desktop::Space<smithay::desktop::Window>; 1]`
+459 |           &[],
+460 |           &mut surface.damage_tracker,
+    |           ---------------------------
+    |           |
+    |           argument #7 of type `&[WaylandSurfaceRenderElement<MultiRenderer<'_, '_, GbmGlesBackend<GlesRenderer, DrmDeviceFd>, GbmGlesBackend<GlesRenderer, DrmDeviceFd>>>]` is missing
+    |           expected `_`, found `&mut OutputDamageTracker`
+461 |           [0.1, 0.1, 0.1, 1.0],
+    |           -------------------- unexpected argument #8 of type `[{float}; 4]`
+    |
+note: function defined here
+   --> /home/ki11errabbit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/desktop/space/mod.rs:667:8
+    |
+667 | pub fn render_output<
+    |        ^^^^^^^^^^^^^
+help: did you mean
+    |
+453 ~     >(
+454 +         &output,
+455 +         &mut renderer,
+456 +         /* &mut MultiFramebuffer<'_, GbmGlesBackend<GlesRenderer, DrmDeviceFd>, GbmGlesBackend<GlesRenderer, DrmDeviceFd>> */,
+457 +         1.0,
+458 +         0,
+459 +         &[],
+460 +         /* &[WaylandSurfaceRenderElement<MultiRenderer<'_, '_, GbmGlesBackend<GlesRenderer, DrmDeviceFd>, GbmGlesBackend<GlesRenderer, DrmDeviceFd>>>] */,
+461 +         &mut surface.damage_tracker,
+462 +         [&alice.space],
+463 ~     );
+    |
+
+error[E0308]: mismatched types
+   --> src/state/backend/udev.rs:474:38
+    |
+474 |         .render_frame(&mut renderer, &elements, [0.1, 0.1, 0.1, 1.0], FrameFlags::DEFAULT)
+    |          ------------                ^^^^^^^^^ expected `&[_]`, found `&RenderOutputResult<'_>`
+    |          |
+    |          arguments to this method are incorrect
+    |
+    = note: expected reference `&[_]`
+               found reference `&RenderOutputResult<'_>`
+note: method defined here
+   --> /home/ki11errabbit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/backend/drm/output.rs:602:12
+    |
+602 |     pub fn render_frame<'a, R, E>(
+    |            ^^^^^^^^^^^^
 
 warning: unused variable: `surface`
   --> src/handlers/xdg_shell.rs:79:38
@@ -297,25 +300,10 @@ warning: variable does not need to be mutable
    |             |
    |             help: remove this `mut`
 
-error[E0521]: borrowed data escapes outside of associated function
-   --> src/state/backend/udev.rs:108:39
-    |
- 71 |         event_loop: &mut EventLoop<crate::CalloopData<Self>>,
-    |         ----------
-    |         |
-    |         `event_loop` is a reference that is only valid in the associated function body
-    |         has type `&mut smithay::reexports::calloop::EventLoop<'1, CalloopData<UdevData>>`
-...
-108 |                     if let Err(err) = device_added(&mut data.state, &handle, device_id, &path) {
-    |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    |                                       |
-    |                                       `event_loop` escapes the associated function body here
-    |                                       argument requires that `'1` must outlive `'static`
-
 warning: unused variable: `dh`
-   --> src/state/backend/udev.rs:133:21
+   --> src/state/backend/udev.rs:140:21
     |
-133 |                 let dh = state.display_handle.clone();
+140 |                 let dh = state.display_handle.clone();
     |                     ^^ help: if this is intentional, prefix it with an underscore: `_dh`
 
 warning: variable does not need to be mutable
@@ -348,7 +336,7 @@ warning: variable does not need to be mutable
     |             |
     |             help: remove this `mut`
 
-Some errors have detailed explanations: E0283, E0521.
-For more information about an error, try `rustc --explain E0283`.
-warning: `alice-wm` (bin "alice-wm") generated 42 warnings
-error: could not compile `alice-wm` (bin "alice-wm") due to 4 previous errors; 42 warnings emitted
+Some errors have detailed explanations: E0061, E0308.
+For more information about an error, try `rustc --explain E0061`.
+warning: `alice-wm` (bin "alice-wm") generated 37 warnings
+error: could not compile `alice-wm` (bin "alice-wm") due to 3 previous errors; 37 warnings emitted

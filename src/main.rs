@@ -26,14 +26,13 @@ pub struct CalloopData<BackendData: Backend + 'static> {
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use smithay::backend::session::Event as SessionEvent;
     if let Ok(env_filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
         tracing_subscriber::fmt().with_env_filter(env_filter).init();
     } else {
         tracing_subscriber::fmt().init();
     }
 
-    let mut event_loop: EventLoop<CalloopData<WinitData>> = EventLoop::try_new()?;
+    let mut event_loop: EventLoop<'static, CalloopData<WinitData>> = EventLoop::try_new()?;
     /*
     let (session, notifier) = LibSeatSession::new()?;
 

@@ -37,6 +37,13 @@ use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 
 use crate::{state::backend::Backend, Alice, CalloopData};
 
+type UdevRenderer<'a> = smithay::backend::renderer::multigpu::MultiRenderer<
+    'a,
+    'a,
+    GbmGlesBackend<GlesRenderer, DrmDeviceFd>,
+    GbmGlesBackend<GlesRenderer, DrmDeviceFd>,
+>;
+
 pub struct GpuBackendData {
     pub drm_output_manager:
         DrmOutputManager<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>,
@@ -68,7 +75,7 @@ impl Backend for UdevData {
     }
 
     fn setup(
-        event_loop: &mut EventLoop<crate::CalloopData<Self>>,
+        event_loop: &mut EventLoop<'static, crate::CalloopData<Self>>,
     ) -> Result<crate::CalloopData<Self>, Box<dyn std::error::Error>> {
         let (session, notifier) = LibSeatSession::new()?;
         let seat_name = session.seat();
@@ -343,7 +350,7 @@ fn connector_connected(alice: &mut Alice<UdevData>, node: DrmNode, connector: co
     let Ok(mut renderer) = alice.backend_data.gpus.single_renderer(&render_node) else {
         return;
     };
-
+    let empty_elements: &[WaylandSurfaceRenderElement<UdevRenderer<'_>>] = &[];
     match backend.drm_output_manager.initialize_output(
         crtc,
         drm_mode,
@@ -351,7 +358,7 @@ fn connector_connected(alice: &mut Alice<UdevData>, node: DrmNode, connector: co
         &output,
         None,
         &mut renderer,
-        &Default::default(),
+        empty_elements,
     ) {
         Ok(drm_output) => {
             backend.surfaces.insert(
@@ -438,7 +445,7 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     };
     let output = surface.output.clone();
 
-    let render_result = smithay::desktop::space::render_output::
+    let render_result = smithay::desktop::space::render_output::<
         _,
         WaylandSurfaceRenderElement<_>,
         _,
