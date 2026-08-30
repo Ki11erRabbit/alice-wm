@@ -54,6 +54,7 @@ impl<BackendData: Backend + 'static> WlrLayerShellHandler for Alice<BackendData>
         namespace: String,
     )
     {
+        eprintln!("new_layer_surface: namespace={:?} layer={:?}", namespace, layer);
         let output = output
             .and_then(|output| {
                 Output::from_resource(&output)
