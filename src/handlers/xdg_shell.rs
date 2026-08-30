@@ -32,6 +32,7 @@ impl<BackendData: Backend + 'static> XdgShellHandler for Alice<BackendData> {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        eprintln!("new_toplevel called, {} windows already registered", self.window_registry.len());
         let pointer_loc = self.seat.get_pointer().unwrap()
             .current_location();
 

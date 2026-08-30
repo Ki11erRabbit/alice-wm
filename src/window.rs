@@ -159,6 +159,10 @@ impl WindowRegistry {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
     pub fn insert(&mut self, info: WindowInfo) -> WindowId {
         let id = if let Some(id) = self.available_ids.pop() {
             id
