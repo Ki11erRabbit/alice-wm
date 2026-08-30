@@ -63,7 +63,7 @@ fn spawn_loop() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        event_loop.run(None, &mut data, move |_| {
+        event_loop.run(None, &mut data, move |data| {
             // Smallvil is running
             let _ = data.display_handle.flush_clients();
         })?;
