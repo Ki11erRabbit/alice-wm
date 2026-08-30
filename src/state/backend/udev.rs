@@ -226,7 +226,7 @@ pub fn device_added(
                 // Reuse the already-opened render GPU's GBM device rather
                 // than opening a second fd on it.
                 let gbm = cached_gbm.clone();
-                let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING);
+                let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
                 let render_node = alice.backend_data.primary_gpu;
 
                 if let Err(err) = alice.backend_data.gpus.as_mut().add_node(render_node, gbm.clone()) {
