@@ -317,25 +317,35 @@ fn finish_kms_device(
     fd: DrmDeviceFd,
     drm_device: DrmDevice,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (gbm, render_node) = if let Some(own_render_node) =
-        node.node_with_type(NodeType::Render).and_then(|r| r.ok())
-    {
-        (GbmDevice::new(fd)?, own_render_node)
+    // Always local to this device's own fd — required so AddFB2 targets
+    // the right DRM device (the one that will actually scan out).
+    let gbm = GbmDevice::new(fd)?;
+
+    let own_render_node = node.node_with_type(NodeType::Render).and_then(|r| r.ok());
+    let render_node = own_render_node.unwrap_or(alice.backend_data.primary_gpu);
+
+    // Buffer allocation must happen on a render-capable device. If this
+    // node can't render itself (e.g. DCP), borrow the cached render GBM
+    // device (e.g. AGX) purely for allocation.
+    let alloc_gbm = if let Some(_) = own_render_node {
+        gbm.clone()
     } else {
-        let primary = alice.backend_data.primary_gpu;
-        let cached_gbm = alice
+        alice
             .backend_data
             .render_gbm_devices
-            .get(&primary)
+            .get(&render_node)
             .ok_or("expected a cached render GPU by this point")?
-            .clone();
-        (cached_gbm, primary)
+            .clone()
     };
+    let allocator = GbmAllocator::new(alloc_gbm, GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
 
-    let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
-
-    if let Err(err) = alice.backend_data.gpus.as_mut().add_node(render_node, gbm.clone()) {
-        eprintln!("Failed to add render node {:?}: {}", render_node, err);
+    // Only register this node with GpuManager if it's actually the
+    // render-capable one — the render-only node was already registered
+    // in device_added's fallback branch.
+    if own_render_node.is_some() {
+        if let Err(err) = alice.backend_data.gpus.as_mut().add_node(render_node, gbm.clone()) {
+            eprintln!("Failed to add render node {:?}: {}", render_node, err);
+        }
     }
 
     let renderer_formats = alice
