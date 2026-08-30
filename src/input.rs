@@ -29,6 +29,10 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     |state, modifiers, keysym_handle| {
                         let keysym = keysym_handle.modified_sym();
 
+                        if modifiers.ctrl && modifiers.alt && keysym == Keysym::BackSpace {
+                            std::process::exit(0);
+                        }
+
                         if key_state == KeyState::Pressed && state.try_handle_keypress(modifiers, keysym) {
                             return FilterResult::Intercept(());
                         }
