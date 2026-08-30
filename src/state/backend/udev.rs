@@ -104,13 +104,28 @@ impl Backend for UdevData {
         let display_handle = display.handle();
         let mut alice = Alice::new(backend_data, event_loop, display);
 
-        // Need the handle before the initial device scan, since device_added takes it.
         let handle = event_loop.handle();
 
         let udev_backend = UdevBackend::new(&seat_name)?;
+        let mut deferred: Vec<(dev_t, std::path::PathBuf)> = Vec::new();
+
         for (device_id, path) in udev_backend.device_list() {
+            match device_added(&mut alice, &handle, device_id, &path) {
+                Ok(()) => {}
+                Err(err) if err.to_string().contains("No render-capable GPU available yet") => {
+                    deferred.push((device_id, path.to_path_buf()));
+                }
+                Err(err) => {
+                    eprintln!("Failed to add device {:?}: {}", device_id, err);
+                }
+            }
+        }
+
+        // Second pass: by now every device that CAN register a render node has,
+        // regardless of what order udev originally handed them to us in.
+        for (device_id, path) in deferred {
             if let Err(err) = device_added(&mut alice, &handle, device_id, &path) {
-                eprintln!("Failed to add device {:?}: {}", device_id, err);
+                eprintln!("Failed to add device {:?} on retry: {}", device_id, err);
             }
         }
 
