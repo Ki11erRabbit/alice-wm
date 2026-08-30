@@ -6,16 +6,26 @@ edition = "2024"
 [dependencies]
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 bitflags = "2.13.1"
-xdg = "3.0.0"
 anyhow = "1.0.104"
+xdg = "3.0.0"
+# smithay-drm-extras = "0.1.0"
 
 [dependencies.smithay]
 version = "0.7.0"
 default-features = false
 features = [
     "backend_winit",
+    "backend_drm",
+    "backend_gbm",
+    "backend_egl",
+    "backend_udev",
+    "backend_libinput",
+    "backend_session_libseat",
+    "renderer_gl",
+    "renderer_multi",
+    "desktop",
     "wayland_frontend",
-    "desktop"
+    "xwayland",
 ]
 
 [dependencies.mlua]
@@ -25,3 +35,4 @@ features = [
     "lua55",
     "error-send",
 ]
+

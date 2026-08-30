@@ -10,9 +10,9 @@ use smithay::{
     utils::SERIAL_COUNTER,
 };
 
-use crate::{output::TagId, state::Alice};
+use crate::{output::TagId, state::{Alice, backend::Backend}};
 
-impl Alice {
+impl<BackendData: Backend + 'static> Alice<BackendData> {
     pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
         match event {
             InputEvent::Keyboard { event, .. } => {

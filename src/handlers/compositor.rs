@@ -1,4 +1,4 @@
-use crate::{Alice, grabs::resize_grab, state::ClientState};
+use crate::{Alice, grabs::resize_grab, state::{ClientState, backend::{Backend, winit::WinitData}}};
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_shm,
@@ -18,7 +18,7 @@ use smithay::{
 use super::xdg_shell;
 use super::wlr_shell;
 
-impl CompositorHandler for Alice {
+impl<BackendData: Backend + 'static> CompositorHandler for Alice<BackendData> {
     fn compositor_state(&mut self) -> &mut CompositorState {
         &mut self.compositor_state
     }
@@ -49,15 +49,15 @@ impl CompositorHandler for Alice {
     }
 }
 
-impl BufferHandler for Alice {
+impl<BackendData: Backend + 'static> BufferHandler for Alice<BackendData> {
     fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
 }
 
-impl ShmHandler for Alice {
+impl<BackendData: Backend + 'static> ShmHandler for Alice<BackendData> {
     fn shm_state(&self) -> &ShmState {
         &self.shm_state
     }
 }
 
-delegate_compositor!(Alice);
-delegate_shm!(Alice);
+delegate_compositor!(@<BackendData: Backend + 'static> Alice<BackendData>);
+delegate_shm!(@<BackendData: Backend + 'static> Alice<BackendData>);

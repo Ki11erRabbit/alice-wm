@@ -3,6 +3,8 @@ mod xdg_shell;
 mod wlr_shell;
 
 use crate::Alice;
+use crate::state::backend::Backend;
+use crate::state::backend::winit::WinitData;
 
 //
 // Wl Seat
@@ -18,12 +20,12 @@ use smithay::wayland::selection::data_device::{
 use smithay::wayland::selection::SelectionHandler;
 use smithay::{delegate_data_device, delegate_output, delegate_seat};
 
-impl SeatHandler for Alice {
+impl<BackendData: Backend + 'static> SeatHandler for Alice<BackendData> {
     type KeyboardFocus = WlSurface;
     type PointerFocus = WlSurface;
     type TouchFocus = WlSurface;
 
-    fn seat_state(&mut self) -> &mut SeatState<Alice> {
+    fn seat_state(&mut self) -> &mut SeatState<Alice<BackendData>> {
         &mut self.seat_state
     }
 
@@ -36,30 +38,30 @@ impl SeatHandler for Alice {
     }
 }
 
-delegate_seat!(Alice);
+delegate_seat!(@<BackendData: Backend + 'static> Alice<BackendData>);
 
 //
 // Wl Data Device
 //
 
-impl SelectionHandler for Alice {
+impl<BackendData: Backend + 'static> SelectionHandler for Alice<BackendData> {
     type SelectionUserData = ();
 }
 
-impl DataDeviceHandler for Alice {
+impl<BackendData: Backend + 'static> DataDeviceHandler for Alice<BackendData> {
     fn data_device_state(&self) -> &DataDeviceState {
         &self.data_device_state
     }
 }
 
-impl ClientDndGrabHandler for Alice {}
-impl ServerDndGrabHandler for Alice {}
+impl<BackendData: Backend + 'static> ClientDndGrabHandler for Alice<BackendData> {}
+impl<BackendData: Backend + 'static> ServerDndGrabHandler for Alice<BackendData> {}
 
-delegate_data_device!(Alice);
+delegate_data_device!(@<BackendData: Backend + 'static> Alice<BackendData>);
 
 //
 // Wl Output & Xdg Output
 //
 
-impl OutputHandler for Alice {}
-delegate_output!(Alice);
+impl<BackendData: Backend + 'static> OutputHandler for Alice<BackendData> {}
+delegate_output!(@<BackendData: Backend + 'static> Alice<BackendData>);

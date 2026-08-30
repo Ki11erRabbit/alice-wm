@@ -23,10 +23,10 @@ use smithay::{
 };
 
 use crate::{
-    Alice, grabs::{MoveSurfaceGrab, ResizeSurfaceGrab}, output::{LayoutScope, TagId}, window::WindowInfo
+    Alice, grabs::{MoveSurfaceGrab, ResizeSurfaceGrab}, output::{LayoutScope, TagId}, state::backend::{Backend, winit::WinitData}, window::WindowInfo
 };
 
-impl XdgShellHandler for Alice {
+impl<BackendData: Backend + 'static> XdgShellHandler for Alice<BackendData> {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell_state
     }
@@ -161,13 +161,13 @@ impl XdgShellHandler for Alice {
 }
 
 // Xdg Shell
-delegate_xdg_shell!(Alice);
+delegate_xdg_shell!(@<BackendData: Backend + 'static> Alice<BackendData>);
 
-fn check_grab(
-    seat: &Seat<Alice>,
+fn check_grab<BackendData: Backend + 'static>(
+    seat: &Seat<Alice<BackendData>>,
     surface: &WlSurface,
     serial: Serial,
-) -> Option<PointerGrabStartData<Alice>> {
+) -> Option<PointerGrabStartData<Alice<BackendData>>> {
     let pointer = seat.get_pointer()?;
 
     // Check that this surface has a click grab.
@@ -225,7 +225,7 @@ pub fn handle_commit(popups: &mut PopupManager, space: &Space<Window>, surface: 
     }
 }
 
-impl Alice {
+impl<BackendData: Backend + 'static> Alice<BackendData> {
     fn unconstrain_popup(&self, popup: &PopupSurface) {
         let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(popup.clone())) else {
             return;

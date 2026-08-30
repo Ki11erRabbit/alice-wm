@@ -1,3 +1,5 @@
+pub mod backend;
+
 use std::{ffi::OsString, sync::Arc};
 
 use smithay::{
@@ -15,9 +17,11 @@ use smithay::{
     }
 };
 
-use crate::{CalloopData, config::{Action, Config, KeyPress, execute_lua_config}, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputInfo, Outputs, TagId}, window::{LayoutInfo, WindowId, WindowRegistry}};
+use crate::{CalloopData, config::{Action, Config, KeyPress, execute_lua_config}, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputInfo, Outputs, TagId}, state::backend::Backend, window::{LayoutInfo, WindowId, WindowRegistry}};
 
-pub struct Alice {
+pub struct Alice<BackendData: Backend + 'static> {
+    pub backend_data: BackendData,
+
     pub start_time: std::time::Instant,
     pub socket_name: OsString,
     pub display_handle: DisplayHandle,
@@ -39,15 +43,19 @@ pub struct Alice {
     pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
     pub output_manager_state: OutputManagerState,
-    pub seat_state: SeatState<Alice>,
+    pub seat_state: SeatState<Alice<BackendData>>,
     pub data_device_state: DataDeviceState,
     pub popups: PopupManager,
 
     pub seat: Seat<Self>,
 }
 
-impl Alice {
-    pub fn new(event_loop: &mut EventLoop<CalloopData>, display: Display<Self>) -> Self {
+impl<BackendData: Backend + 'static> Alice<BackendData> {
+    pub fn new(
+        backend: BackendData,
+        event_loop: &mut EventLoop<CalloopData<BackendData>>,
+        display: Display<Self>
+    ) -> Self {
         let start_time = std::time::Instant::now();
 
         let dh: DisplayHandle  = display.handle();
@@ -91,9 +99,11 @@ impl Alice {
             }
         };
 
-        let layer_shell_state = WlrLayerShellState::new::<Alice>(&dh);
+        let layer_shell_state = WlrLayerShellState::new::<Alice<BackendData>>(&dh);
 
         Self {
+            backend_data: backend,
+
             start_time,
             display_handle: dh,
 
@@ -122,8 +132,8 @@ impl Alice {
     }
 
     fn init_wayland_listener(
-        display: Display<Alice>,
-        event_loop: &mut EventLoop<CalloopData>,
+        display: Display<Alice<BackendData>>,
+        event_loop: &mut EventLoop<CalloopData<BackendData>>,
     ) -> OsString {
         // Creates a new listening socket, automatically choosing the next available `wayland` socket name.
         let listening_socket = ListeningSocketSource::new_auto().unwrap();

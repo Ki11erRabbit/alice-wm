@@ -12,20 +12,19 @@ use smithay::{
     utils::{Rectangle, Transform},
 };
 
-use crate::{CalloopData, Alice};
+use crate::{Alice, CalloopData, state::backend::winit::WinitData};
 
 pub fn init_winit(
-    event_loop: &mut EventLoop<CalloopData>,
-    data: &mut CalloopData,
+    event_loop: &mut EventLoop<CalloopData<WinitData>>,
+    data: &mut CalloopData<WinitData>,
     output: Output,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let display_handle = &mut data.display_handle;
     let state = &mut data.state;
 
     let (mut backend, winit) = winit::init()?;
-
-
     let mut damage_tracker = OutputDamageTracker::from_output(&output);
+    state.backend_data = WinitData { backend, damage_tracker };
 
     unsafe {
         std::env::set_var("WAYLAND_DISPLAY", &state.socket_name);

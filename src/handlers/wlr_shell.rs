@@ -8,6 +8,8 @@ use smithay::utils::{Logical, Rectangle, Size, SERIAL_COUNTER};
 
 use crate::Alice;
 use crate::output::LayoutScope;
+use crate::state::backend::Backend;
+use crate::state::backend::winit::WinitData;
 
 /// The wlr-layer-shell protocol expects the compositor to hint a real size on any
 /// axis the surface has anchored to both opposing edges (it needs to know how much
@@ -39,7 +41,7 @@ fn suggested_size(surface: &WlSurface, zone: Rectangle<i32, Logical>) -> Size<i3
 
 
 
-impl WlrLayerShellHandler for Alice {
+impl<BackendData: Backend + 'static> WlrLayerShellHandler for Alice<BackendData> {
     fn shell_state(&mut self) -> &mut smithay::wayland::shell::wlr_layer::WlrLayerShellState {
         &mut self.layer_shell_state
     }
@@ -120,7 +122,7 @@ impl WlrLayerShellHandler for Alice {
 
 }
 
-pub fn handle_commit(state: &mut Alice, surface: &WlSurface) {
+pub fn handle_commit<BackendData: Backend + 'static>(state: &mut Alice<BackendData>, surface: &WlSurface) {
     let Some((output_id, info)) = state.layer_surfaces.find_by_wl_surface(surface) else {
         return;
     };
@@ -169,4 +171,4 @@ pub fn handle_commit(state: &mut Alice, surface: &WlSurface) {
     }));
 }
 
-smithay::delegate_layer_shell!(Alice);
+smithay::delegate_layer_shell!(@<BackendData: Backend + 'static> Alice<BackendData>);
