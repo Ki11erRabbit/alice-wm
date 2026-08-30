@@ -28,13 +28,6 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     time,
                     |state, modifiers, keysym_handle| {
                         let keysym = keysym_handle.modified_sym();
-                        eprintln!("key: ctrl={} alt={} shift={} logo={} sym={:?}",
-                            modifiers.ctrl, modifiers.alt, modifiers.shift, modifiers.logo, keysym);
-
-                        if modifiers.ctrl && modifiers.alt && keysym == Keysym::BackSpace {
-                            std::process::exit(0);
-                        }
-
                         if key_state == KeyState::Pressed && state.try_handle_keypress(modifiers, keysym) {
                             return FilterResult::Intercept(());
                         }

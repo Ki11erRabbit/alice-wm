@@ -639,13 +639,18 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             }
             Action::Close => {
                 let Some(info) = self.window_registry.get_focused() else {
-                    eprintln!("Close: no focused window");
                     return;
                 };
-                eprintln!("Close: sending close to focused window");
                 if let Some(toplevel) = info.window.toplevel() {
                     toplevel.send_close();
                 }
+                let Some(info) = self.window_registry.filter(&LayoutScope {
+                    output: info.output,
+                    tag: info.tag,
+                }).next() else {
+                    return;
+                };
+                self.window_registry.change_focus(info);
             }
             Action::FullScreen => {
                 let id = self.window_registry.focused_window();
