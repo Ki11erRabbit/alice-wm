@@ -30,41 +30,15 @@ fn spawn_loop() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok() {
         let mut event_loop: EventLoop<'static, CalloopData<WinitData>> = EventLoop::try_new()?;
         let mut data = WinitData::setup(&mut event_loop)?;
-
-        let mut args = std::env::args().skip(1);
-        let flag = args.next();
-        let arg = args.next();
-
-        match (flag.as_deref(), arg) {
-            (Some("-c") | Some("--command"), Some(command)) => {
-                std::process::Command::new(command).spawn().ok();
-            }
-            _ => {
-                std::process::Command::new("weston-terminal").spawn().ok();
-            }
-        }
-
-        event_loop.run(None, &mut data, move |_| {
+        event_loop.run(None, &mut data, move |data| {
+            data.state.do_autostart_if_needed();
             // Smallvil is running
         })?;
     } else {
         let mut event_loop: EventLoop<'static, CalloopData<UdevData>> = EventLoop::try_new()?;
         let mut data = UdevData::setup(&mut event_loop)?;
-
-        let mut args = std::env::args().skip(1);
-        let flag = args.next();
-        let arg = args.next();
-
-        match (flag.as_deref(), arg) {
-            (Some("-c") | Some("--command"), Some(command)) => {
-                std::process::Command::new(command).spawn().ok();
-            }
-            _ => {
-                std::process::Command::new("weston-terminal").spawn().ok();
-            }
-        }
-
         event_loop.run(None, &mut data, move |data| {
+            data.state.do_autostart_if_needed();
             // Smallvil is running
             let _ = data.display_handle.flush_clients();
         })?;

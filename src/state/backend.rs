@@ -3,7 +3,7 @@ pub mod udev;
 
 use smithay::{input::keyboard::LedState, output::Output, reexports::{calloop::EventLoop, wayland_server::{protocol::wl_surface}}};
 
-use crate::CalloopData;
+use crate::{CalloopData, config::Config};
 
 
 
@@ -17,5 +17,7 @@ pub trait Backend: Sized {
     fn early_import(&mut self, surface: &wl_surface::WlSurface);
     fn update_led_state(&mut self, led_state: LedState);
     fn schedule_render(alice: &mut crate::Alice<Self>);
+    fn make_config() -> Config;
+
 }
 

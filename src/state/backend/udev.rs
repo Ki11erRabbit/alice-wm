@@ -30,7 +30,7 @@ use smithay::{
 use smithay::desktop::space::OutputError;
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 
-use crate::{state::backend::Backend, Alice, CalloopData};
+use crate::{Alice, CalloopData, config::Config, state::backend::Backend};
 
 // ---------------------------------------------------------------------
 // Types
@@ -279,6 +279,17 @@ impl Backend for UdevData {
         for (node, crtc) in targets {
             render_surface(alice, node, crtc);
         }
+    }
+
+    fn make_config() -> Config {
+        let config = match crate::config::execute_lua_config(false) {
+            Ok(config) => config,
+            Err(err) => {
+                eprintln!("Error while loading config: {err}");
+                Config::default()
+            }
+        };
+        config
     }
 }
 

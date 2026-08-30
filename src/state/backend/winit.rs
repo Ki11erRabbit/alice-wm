@@ -4,8 +4,7 @@ use std::time::Duration;
 use smithay::{backend::{drm::{DrmNode, NodeType}, input::{DeviceCapability, InputEvent}, libinput::{LibinputInputBackend, LibinputSessionInterface}, renderer::{damage::OutputDamageTracker, gles::GlesRenderer}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, primary_gpu}, winit::{self, WinitEvent, WinitGraphicsBackend}}, output::{Mode, Output, PhysicalProperties, Scale, Subpixel}, reexports::{
     calloop::EventLoop, input::Libinput, wayland_server::{Display, DisplayHandle, protocol::wl_surface}
 }, utils::{Rectangle, Transform}};
-use crate::{Alice, CalloopData, state::backend::Backend};
-
+use crate::{Alice, CalloopData, config::Config, state::backend::Backend};
 
 
 
@@ -197,5 +196,16 @@ impl Backend for WinitData {
 
     fn schedule_render(_alice: &mut crate::Alice<Self>) {
 
+    }
+
+    fn make_config() -> Config {
+        let config = match crate::config::execute_lua_config(true) {
+            Ok(config) => config,
+            Err(err) => {
+                eprintln!("Error while loading config: {err}");
+                Config::default()
+            }
+        };
+        config
     }
 }

@@ -17,7 +17,7 @@ use smithay::{
     }
 };
 
-use crate::{CalloopData, config::{Action, Config, KeyPress, execute_lua_config}, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputInfo, Outputs, TagId}, state::backend::Backend, window::{LayoutInfo, WindowId, WindowRegistry}};
+use crate::{CalloopData, config::{Action, Config, KeyPress, execute_lua_config}, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputInfo, Outputs, TagId}, state::backend::{Backend, udev::UdevData, winit::WinitData}, window::{LayoutInfo, WindowId, WindowRegistry}};
 
 pub struct Alice<BackendData: Backend + 'static> {
     pub backend_data: BackendData,
@@ -37,6 +37,7 @@ pub struct Alice<BackendData: Backend + 'static> {
     pub layer_shell_state: WlrLayerShellState,
 
     pub config: Config,
+    pub done_autostart: bool,
 
     // Smithay State
     pub compositor_state: CompositorState,
@@ -95,13 +96,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         // Get the loop signal, used to stop the event loop
         let loop_signal = event_loop.get_signal();
 
-        let config = match execute_lua_config() {
-            Ok(config) => config,
-            Err(err) => {
-                eprintln!("Error while loading config: {err}");
-                Config::default()
-            }
-        };
+        let config = BackendData::make_config();
 
         let layer_shell_state = WlrLayerShellState::new::<Alice<BackendData>>(&dh);
 
@@ -123,6 +118,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             layer_shell_state,
 
             config,
+            done_autostart: false,
 
             compositor_state,
             xdg_shell_state,
@@ -809,12 +805,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         match action {
             Action::Quit => std::process::exit(0),
             Action::ReloadConfig => {
-                match execute_lua_config() {
-                    Ok(config) => self.config = config,
-                    Err(err) => {
-                        eprintln!("Error reloading config: {err}");
-                    }
-                }
+                self.config = BackendData::make_config();
             }
             Action::Close => {
                 let Some(info) = self.window_registry.get_focused() else {
@@ -889,10 +880,16 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             Action::FocusOutputDown => {
                 self.focus_output_direction(crate::output::Direction::Down);
             }
-
-
         }
+    }
 
+    pub fn do_autostart_if_needed(&mut self) {
+        if !self.done_autostart {
+            for command in self.config.autostarts() {
+                self.spawn(command);
+            }
+            self.done_autostart = true;
+        }
     }
 }
 

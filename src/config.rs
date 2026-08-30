@@ -173,6 +173,7 @@ impl OutputPosition {
 pub struct Config {
     map: HashMap<KeyPress, Action>,
     output_positions: HashMap<String, OutputPosition>,
+    auto_start: Vec<String>,
 }
 
 impl Config {
@@ -180,6 +181,7 @@ impl Config {
         Self {
             map: HashMap::new(),
             output_positions: HashMap::new(),
+            auto_start: Vec::new(),
         }
     }
 
@@ -201,6 +203,10 @@ impl Config {
 
     pub fn set_output_position(&mut self, name: String, position: OutputPosition) {
         self.output_positions.insert(name, position);
+    }
+
+    pub fn autostarts(&self) -> impl Iterator<Item = &String> {
+        self.auto_start.iter()
     }
 }
 
@@ -236,23 +242,23 @@ impl Default for Config {
 
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('j'),
+            keysym: Keysym::from_char('J'),
         }, Action::MoveDownStack);
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('k'),
+            keysym: Keysym::from_char('K'),
         }, Action::MoveUpStack);
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('u'),
+            keysym: Keysym::from_char('U'),
         }, Action::MovePreviousTag);
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('i'),
+            keysym: Keysym::from_char('I'),
         }, Action::MoveNextTag);
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('q'),
+            keysym: Keysym::from_char('Q'),
         }, Action::Quit);
 
         map.insert(KeyPress {
@@ -295,39 +301,39 @@ impl Default for Config {
 
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('1'),
+            keysym: Keysym::from_char('!'),
         }, Action::MoveToTag(TagId(0)));
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('2'),
+            keysym: Keysym::from_char('@'),
         }, Action::MoveToTag(TagId(1)));
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('3'),
+            keysym: Keysym::from_char('#'),
         }, Action::MoveToTag(TagId(2)));
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('4'),
+            keysym: Keysym::from_char('$'),
         }, Action::MoveToTag(TagId(3)));
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('5'),
+            keysym: Keysym::from_char('%'),
         }, Action::MoveToTag(TagId(4)));
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('6'),
+            keysym: Keysym::from_char('^'),
         }, Action::MoveToTag(TagId(5)));
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('7'),
+            keysym: Keysym::from_char('&'),
         }, Action::MoveToTag(TagId(6)));
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('8'),
+            keysym: Keysym::from_char('*'),
         }, Action::MoveToTag(TagId(7)));
         map.insert(KeyPress {
             modifiers: main_mod | ModMask::Shift,
-            keysym: Keysym::from_char('9'),
+            keysym: Keysym::from_char('('),
         }, Action::MoveToTag(TagId(8)));
 
         map.insert(KeyPress {
@@ -366,12 +372,13 @@ impl Default for Config {
         Self {
             map,
             output_positions: HashMap::new(),
+            auto_start: Vec::new(),
         }
     }
 }
 
 /// Creates a lua interpreter with all need modules
-fn create_lua() -> mlua::Result<Lua> {
+fn create_lua(use_alt: bool) -> mlua::Result<Lua> {
     let lua = Lua::new();
 
     let modifier_table: Table = lua.create_table()?;
@@ -390,6 +397,13 @@ fn create_lua() -> mlua::Result<Lua> {
     })?)?;
     modifier_table.set("none", lua.create_function(|_, _: ()| {
         Ok(ModMask::empty())
+    })?)?;
+    modifier_table.set("default", lua.create_function(move |_, _: ()| {
+        if use_alt {
+            Ok(ModMask::Alt)
+        } else {
+            Ok(ModMask::Super)
+        }
     })?)?;
 
     lua.globals().set("Modifiers", modifier_table)?;
@@ -480,7 +494,6 @@ fn create_lua() -> mlua::Result<Lua> {
 
     lua.globals().set("Key", key_press_table)?;
 
-
     Ok(lua)
 }
 
@@ -503,10 +516,10 @@ fn parse_keystring(key: &str) -> mlua::Result<Keysym> {
 }
 
 
-fn load_config(file_text: &str) -> mlua::Result<Config> {
+fn load_config(use_alt: bool, file_text: &str) -> mlua::Result<Config> {
     use std::rc::Rc;
     use std::cell::RefCell;
-    let lua = create_lua()?;
+    let lua = create_lua(use_alt)?;
     let config = Rc::new(RefCell::new(Config::new()));
 
     let config_clone = config.clone();
@@ -515,6 +528,15 @@ fn load_config(file_text: &str) -> mlua::Result<Config> {
         let config = config_clone.clone();
         let mut guard = config.borrow_mut();
         guard.insert_keypress(keypress, action);
+        Ok(())
+    })?)?;
+
+    let config_clone = config.clone();
+
+    lua.globals().set("autostart", lua.create_function_mut(move |_, command: String| {
+        let config = config_clone.clone();
+        let mut guard = config.borrow_mut();
+        guard.auto_start.push(command);
         Ok(())
     })?)?;
 
@@ -566,7 +588,7 @@ fn load_config(file_text: &str) -> mlua::Result<Config> {
 }
 
 
-pub fn execute_lua_config() -> anyhow::Result<Config> {
+pub fn execute_lua_config(use_alt: bool) -> anyhow::Result<Config> {
     let xdg_dirs = xdg::BaseDirectories::with_prefix("alice-wm");
     xdg_dirs.create_config_directory("")?;
     let config_path = match xdg_dirs.find_config_file("config.lua") {
@@ -574,7 +596,7 @@ pub fn execute_lua_config() -> anyhow::Result<Config> {
         None => return Ok(Config::default()),
     };
     let string  = std::fs::read_to_string(config_path)?;
-    let config = load_config(&string)?;
+    let config = load_config(use_alt, &string)?;
 
     Ok(config)
 }
