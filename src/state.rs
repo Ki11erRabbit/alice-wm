@@ -635,8 +635,10 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             }
             Action::Close => {
                 let Some(info) = self.window_registry.get_focused() else {
+                    eprintln!("Close: no focused window");
                     return;
                 };
+                eprintln!("Close: sending close to focused window");
                 if let Some(toplevel) = info.window.toplevel() {
                     toplevel.send_close();
                 }
