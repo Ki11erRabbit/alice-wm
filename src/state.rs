@@ -265,6 +265,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             .collect::<Vec<_>>();
 
         if self.try_full_screen(area, &windows) {
+            BackendData::schedule_render(self);
             return;
         }
 
@@ -276,7 +277,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             self.apply_rects(*id, rect);
         }
 
-
+        BackendData::schedule_render(self);
     }
 
     fn apply_rects(&mut self, id: WindowId, rect: Rect) {
