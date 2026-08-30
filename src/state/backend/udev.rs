@@ -102,7 +102,7 @@ const SUPPORTED_FORMATS: &[Fourcc] = &[
 // ---------------------------------------------------------------------
 
 impl Backend for UdevData {
-    const HAS_RELATIVE_MOTION: bool = false;
+    const HAS_RELATIVE_MOTION: bool = true;
     const HAS_GESTURES: bool = false;
 
     fn seat_name(&self) -> String {
