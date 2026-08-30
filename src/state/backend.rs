@@ -1,4 +1,5 @@
 pub mod winit;
+pub mod udev;
 
 use smithay::{input::keyboard::LedState, output::Output, reexports::{calloop::EventLoop, wayland_server::{Display, protocol::wl_surface}}};
 

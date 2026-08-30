@@ -8,7 +8,7 @@ tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 bitflags = "2.13.1"
 anyhow = "1.0.104"
 xdg = "3.0.0"
-# smithay-drm-extras = "0.1.0"
+smithay-drm-extras = { version = "0.1.0", default-features = false }
 
 [dependencies.smithay]
 version = "0.7.0"
