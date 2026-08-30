@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use mlua::{FromLua, Lua, MetaMethod, Table, UserData};
 use smithay::input::keyboard::{Keysym, ModifiersState};
+use smithay::utils::Transform;
 
 use crate::output::TagId;
 
@@ -25,6 +26,10 @@ pub enum Action {
     FocusUpStack,
     MoveDownStack,
     MoveUpStack,
+    FocusOutputLeft,
+    FocusOutputRight,
+    FocusOutputUp,
+    FocusOutputDown,
 }
 
 impl UserData for Action {
@@ -133,14 +138,48 @@ impl FromLua for KeyPress {
     }
 }
 
+/// A user-configured position for a named output (connector), e.g. `"DP-1"`
+/// or `"HDMI-A-1"`, in the compositor's global (layout) coordinate space,
+/// along with optional transform/scale/refresh preferences for that output.
+#[derive(Clone, Copy, Debug)]
+pub struct OutputPosition {
+    pub x: i32,
+    pub y: i32,
+    /// Rotation and/or flip to apply to the output. Defaults to
+    /// `Transform::Normal` (no rotation, not flipped).
+    pub transform: Transform,
+    /// Fractional scale factor (e.g. `1.5`, `2.0`). `None` leaves the
+    /// backend's default scale (integer 1) in place.
+    pub scale: Option<f64>,
+    /// Desired refresh rate in Hz (e.g. `144.0`). `None` picks the
+    /// connector's preferred mode as before; the udev backend otherwise
+    /// picks whichever available mode at the target resolution has the
+    /// closest refresh rate.
+    pub refresh: Option<f64>,
+}
+
+impl OutputPosition {
+    fn new(x: i32, y: i32) -> Self {
+        Self {
+            x,
+            y,
+            transform: Transform::Normal,
+            scale: None,
+            refresh: None,
+        }
+    }
+}
+
 pub struct Config {
     map: HashMap<KeyPress, Action>,
+    output_positions: HashMap<String, OutputPosition>,
 }
 
 impl Config {
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
+            output_positions: HashMap::new(),
         }
     }
 
@@ -150,6 +189,18 @@ impl Config {
 
     pub fn insert_keypress(&mut self, press: KeyPress, action: Action) {
         self.map.insert(press, action);
+    }
+
+    /// Look up the configured position (and transform/scale/refresh) for an
+    /// output by its connector name (e.g. `"DP-1"`). Returns `None` if the
+    /// user hasn't configured that output, in which case the backend should
+    /// fall back to automatic placement and defaults.
+    pub fn get_output_position(&self, name: &str) -> Option<OutputPosition> {
+        self.output_positions.get(name).copied()
+    }
+
+    pub fn set_output_position(&mut self, name: String, position: OutputPosition) {
+        self.output_positions.insert(name, position);
     }
 }
 
@@ -294,9 +345,27 @@ impl Default for Config {
             keysym: Keysym::Return,
         }, Action::Spawn(String::from("alacritty")));
 
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::Left,
+        }, Action::FocusOutputLeft);
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::Right,
+        }, Action::FocusOutputRight);
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::Up,
+        }, Action::FocusOutputUp);
+        map.insert(KeyPress {
+            modifiers: main_mod,
+            keysym: Keysym::Down,
+        }, Action::FocusOutputDown);
+
 
         Self {
-            map
+            map,
+            output_positions: HashMap::new(),
         }
     }
 }
@@ -383,6 +452,18 @@ fn create_lua() -> mlua::Result<Lua> {
     action_table.set("move_up_stack", lua.create_function(|_, _: ()| {
         Ok(Action::MoveUpStack)
     })?)?;
+    action_table.set("focus_output_left", lua.create_function(|_, _: ()| {
+        Ok(Action::FocusOutputLeft)
+    })?)?;
+    action_table.set("focus_output_right", lua.create_function(|_, _: ()| {
+        Ok(Action::FocusOutputRight)
+    })?)?;
+    action_table.set("focus_output_up", lua.create_function(|_, _: ()| {
+        Ok(Action::FocusOutputUp)
+    })?)?;
+    action_table.set("focus_output_down", lua.create_function(|_, _: ()| {
+        Ok(Action::FocusOutputDown)
+    })?)?;
 
     lua.globals().set("Action", action_table)?;
 
@@ -413,6 +494,10 @@ fn parse_keystring(key: &str) -> mlua::Result<Keysym> {
     }
     match key {
         "Return" => Ok(Keysym::Return),
+        "Left" => Ok(Keysym::Left),
+        "Right" => Ok(Keysym::Right),
+        "Up" => Ok(Keysym::Up),
+        "Down" => Ok(Keysym::Down),
         x => todo!("handle additional keysyms: {x}"),
     }
 }
@@ -430,6 +515,47 @@ fn load_config(file_text: &str) -> mlua::Result<Config> {
         let config = config_clone.clone();
         let mut guard = config.borrow_mut();
         guard.insert_keypress(keypress, action);
+        Ok(())
+    })?)?;
+
+    let config_clone = config.clone();
+
+    // output_position(name, x, y, opts?) — pins an output (by connector name,
+    // e.g. "DP-1" or "HDMI-A-1") to an explicit spot in the global layout
+    // space. Outputs without a configured position fall back to automatic
+    // left-to-right placement. `opts` is an optional table:
+    //   output_position("HDMI-A-1", 1920, 0, {
+    //       rotate = 90,      -- 0, 90, 180, or 270 (degrees, clockwise)
+    //       flipped = true,   -- mirror the output vertically
+    //       scale = 1.5,      -- fractional scale factor
+    //       refresh = 144,    -- desired refresh rate in Hz
+    //   })
+    lua.globals().set("output_position", lua.create_function_mut(move |_, (name, x, y, opts): (String, i32, i32, Option<Table>)| {
+        let mut position = OutputPosition::new(x, y);
+
+        if let Some(opts) = opts {
+            let rotate: Option<i32> = opts.get("rotate")?;
+            let flipped: Option<bool> = opts.get("flipped")?;
+            position.transform = match (rotate.unwrap_or(0), flipped.unwrap_or(false)) {
+                (0, false) => Transform::Normal,
+                (90, false) => Transform::_90,
+                (180, false) => Transform::_180,
+                (270, false) => Transform::_270,
+                (0, true) => Transform::Flipped,
+                (90, true) => Transform::Flipped90,
+                (180, true) => Transform::Flipped180,
+                (270, true) => Transform::Flipped270,
+                (other, _) => return Err(mlua::Error::runtime(
+                    format!("output_position: rotate must be 0, 90, 180, or 270 (got {other})")
+                )),
+            };
+            position.scale = opts.get("scale")?;
+            position.refresh = opts.get("refresh")?;
+        }
+
+        let config = config_clone.clone();
+        let mut guard = config.borrow_mut();
+        guard.set_output_position(name, position);
         Ok(())
     })?)?;
 

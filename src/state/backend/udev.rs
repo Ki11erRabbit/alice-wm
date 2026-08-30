@@ -17,7 +17,7 @@ use smithay::{
         udev::{UdevBackend, UdevEvent, primary_gpu},
     },
     desktop::{Window, space::SpaceRenderElements},
-    output::{Mode as WlMode, Output, PhysicalProperties, Subpixel},
+    output::{Mode as WlMode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::{EventLoop, LoopHandle},
         drm::control::{ModeTypeFlags, connector, crtc},
@@ -25,7 +25,7 @@ use smithay::{
         rustix::fs::OFlags,
         wayland_server::Display,
     },
-    utils::DeviceFd, wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
+    utils::{DeviceFd, Transform}, wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
 };
 use smithay::desktop::space::OutputError;
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
@@ -434,19 +434,46 @@ fn connector_connected(
     node: DrmNode,
     connector: connector::Info,
     crtc: crtc::Handle) {
-    let mode = connector
-        .modes()
+    let name = format!("{}-{}", connector.interface().as_str(), connector.interface_id());
+
+    // Pull the user's config for this connector up front (position,
+    // transform, scale, refresh) so the desired refresh rate can influence
+    // which mode we pick below.
+    let output_cfg = alice.config.get_output_position(&name);
+
+    let modes = connector.modes();
+    let preferred_size = modes
         .iter()
         .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
-        .or_else(|| connector.modes().first())
-        .cloned();
+        .or_else(|| modes.first())
+        .map(|m| m.size());
+
+    let mode = match output_cfg.and_then(|cfg| cfg.refresh) {
+        // A refresh rate was requested: among modes at the preferred/first
+        // mode's resolution, pick whichever has the closest refresh rate.
+        Some(target_hz) => modes
+            .iter()
+            .filter(|m| preferred_size.map_or(true, |size| m.size() == size))
+            .min_by(|a, b| {
+                let da = (a.vrefresh() as f64 - target_hz).abs();
+                let db = (b.vrefresh() as f64 - target_hz).abs();
+                da.total_cmp(&db)
+            })
+            .or_else(|| modes.iter().find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED)))
+            .or_else(|| modes.first())
+            .cloned(),
+        None => modes
+            .iter()
+            .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
+            .or_else(|| modes.first())
+            .cloned(),
+    };
 
     let Some(drm_mode) = mode else {
         eprintln!("No mode available for connector {:?}", connector.interface());
         return;
     };
 
-    let name = format!("{}-{}", connector.interface().as_str(), connector.interface_id());
     let (w, h) = drm_mode.size();
     let refresh = drm_mode.vrefresh() as i32 * 1000;
 
@@ -460,22 +487,35 @@ fn connector_connected(
         },
     );
 
+    let transform = output_cfg.map(|cfg| cfg.transform).unwrap_or(Transform::Normal);
+    let scale = output_cfg.and_then(|cfg| cfg.scale).map(Scale::Fractional);
+
     output.change_current_state(
         Some(WlMode { size: (w as i32, h as i32).into(), refresh }),
-        None,
-        None,
+        Some(transform),
+        scale,
         None,
     );
     output.set_preferred(WlMode { size: (w as i32, h as i32).into(), refresh });
 
-    let x_offset: i32 = alice
-        .outputs
-        .iter()
-        .filter_map(|info| alice.space.output_geometry(&info.output))
-        .map(|geo| geo.size.w)
-        .sum();
+    // Use the position the user configured for this connector (via
+    // `output_position(name, x, y, ...)` in config.lua), if any. Otherwise
+    // fall back to automatically tiling new outputs to the right of existing
+    // ones.
+    let position = match output_cfg {
+        Some(cfg) => (cfg.x, cfg.y),
+        None => {
+            let x_offset: i32 = alice
+                .outputs
+                .iter()
+                .filter_map(|info| alice.space.output_geometry(&info.output))
+                .map(|geo| geo.size.w)
+                .sum();
+            (x_offset, 0)
+        }
+    };
 
-    alice.space.map_output(&output, (x_offset, 0));
+    alice.space.map_output(&output, position);
     output.create_global::<Alice<UdevData>>(&alice.display_handle);
     alice.outputs.insert(output.clone());
     output.user_data().insert_if_missing(|| (node, crtc));

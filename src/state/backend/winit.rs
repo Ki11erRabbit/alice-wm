@@ -59,7 +59,10 @@ impl Backend for WinitData {
         let display: Display<Alice<Self>> = Display::new()?;
         let display_handle = display.handle();
         let mut alice = Alice::new(backend_data, event_loop, display);
-        alice.space.map_output(&output, (0, 0));
+        let position = alice.config.get_output_position(&output.name())
+            .map(|pos| (pos.x, pos.y))
+            .unwrap_or((0, 0));
+        alice.space.map_output(&output, position);
         alice.outputs.insert(output.clone());
         output.create_global::<Alice<Self>>(&display_handle);
 

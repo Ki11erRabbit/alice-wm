@@ -298,13 +298,27 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
     }
 
 
+    /// The area windows can be tiled into for this output, in **global**
+    /// (`Space`) coordinates: the layer-shell reserved zone (panels, bars)
+    /// shifted by wherever this output actually sits in the layout (see
+    /// `Space::map_output`/`output_position` in config.lua). `LayerMap`'s
+    /// non-exclusive zone is always reported relative to the output's own
+    /// origin, so on any output that isn't sitting at global (0, 0) this
+    /// offset must be added back in — otherwise every output's windows get
+    /// tiled into the same region near the space's origin instead of onto
+    /// the output they actually belong to.
     fn usable_area(&mut self, output: &Output) -> Rect {
         let map = layer_map_for_output(output);
         let zone = map.non_exclusive_zone();
+        drop(map);
+
+        let output_loc = self.space.output_geometry(output)
+            .map(|geo| geo.loc)
+            .unwrap_or_default();
 
         Rect {
-            x: zone.loc.x,
-            y: zone.loc.y,
+            x: zone.loc.x + output_loc.x,
+            y: zone.loc.y + output_loc.y,
             width: zone.size.w,
             height: zone.size.h,
         }
@@ -339,6 +353,139 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         }
 
         true
+    }
+
+    /// Focus the nearest output in `direction` relative to the currently
+    /// focused output, based on each output's position in global (layout)
+    /// space (i.e. wherever `Space::map_output` placed it).
+    pub fn focus_output_direction(&mut self, direction: crate::output::Direction) -> Option<()> {
+        use crate::output::Direction;
+
+        let focused = self.outputs.get_focused();
+        let current_id = focused.id;
+        let current_geo = self.space.output_geometry(&focused.output)?;
+
+        // Track the best candidate as (id, primary distance along the travel
+        // axis, secondary distance on the cross axis). Smaller is better on
+        // both, primary first: this prefers the closest output in that
+        // direction, breaking ties by how well it lines up with the current
+        // output (e.g. going "up" prefers an output directly above over one
+        // that's up-and-far-to-the-side).
+        let mut best: Option<(crate::output::OutputId, i32, i32)> = None;
+
+        for info in self.outputs.iter() {
+            if info.id == current_id {
+                continue;
+            }
+            let Some(geo) = self.space.output_geometry(&info.output) else {
+                continue;
+            };
+
+            let (is_candidate, primary_dist) = match direction {
+                Direction::Left => (
+                    geo.loc.x + geo.size.w <= current_geo.loc.x,
+                    current_geo.loc.x - (geo.loc.x + geo.size.w),
+                ),
+                Direction::Right => (
+                    geo.loc.x >= current_geo.loc.x + current_geo.size.w,
+                    geo.loc.x - (current_geo.loc.x + current_geo.size.w),
+                ),
+                Direction::Up => (
+                    geo.loc.y + geo.size.h <= current_geo.loc.y,
+                    current_geo.loc.y - (geo.loc.y + geo.size.h),
+                ),
+                Direction::Down => (
+                    geo.loc.y >= current_geo.loc.y + current_geo.size.h,
+                    geo.loc.y - (current_geo.loc.y + current_geo.size.h),
+                ),
+            };
+
+            if !is_candidate {
+                continue;
+            }
+
+            let secondary_dist = match direction {
+                Direction::Left | Direction::Right => {
+                    axis_gap(current_geo.loc.y, current_geo.size.h, geo.loc.y, geo.size.h)
+                }
+                Direction::Up | Direction::Down => {
+                    axis_gap(current_geo.loc.x, current_geo.size.w, geo.loc.x, geo.size.w)
+                }
+            };
+
+            let is_better = match best {
+                None => true,
+                Some((_, best_primary, best_secondary)) => {
+                    (primary_dist, secondary_dist) < (best_primary, best_secondary)
+                }
+            };
+
+            if is_better {
+                best = Some((info.id, primary_dist, secondary_dist));
+            }
+        }
+
+        let (id, ..) = best?;
+        self.focus_output(id);
+        Some(())
+    }
+
+    /// Switch input focus to a specific output: updates which output is
+    /// "focused" for tag/layout purposes, warps the pointer onto it, and
+    /// hands keyboard focus to whichever window is focused on that output's
+    /// active tag (or clears keyboard focus if the output has no windows).
+    ///
+    /// The pointer warp matters here, not just for feel: `new_toplevel`
+    /// places new windows on whatever output the pointer is over, and
+    /// pointer motion re-focuses whatever window is under the cursor. Without
+    /// moving the pointer, changing `outputs.focused_output` alone is barely
+    /// observable — the very next mouse move or spawned window would just
+    /// snap back to the output the cursor is still sitting on.
+    pub fn focus_output(&mut self, id: crate::output::OutputId) {
+        if self.outputs.get_focused().id == id {
+            return;
+        }
+        self.outputs.change_focus(id);
+
+        let output = self.outputs.get_id(id).output.clone();
+        if let Some(geo) = self.space.output_geometry(&output) {
+            let center = Point::<f64, Logical>::new(
+                (geo.loc.x + geo.size.w / 2) as f64,
+                (geo.loc.y + geo.size.h / 2) as f64,
+            );
+
+            let under = self.surface_under(center);
+            let element_under = self.space.element_under(center);
+            if let Some((window, _)) = element_under {
+                self.focus_window(window.clone());
+            }
+
+            let serial = SERIAL_COUNTER.next_serial();
+            let time = self.start_time.elapsed().as_millis() as u32;
+            let pointer = self.seat.get_pointer().unwrap();
+            pointer.motion(self, under, &smithay::input::pointer::MotionEvent {
+                location: center,
+                serial,
+                time,
+            });
+            pointer.frame(self);
+        }
+
+        let focused_window = self.outputs.get_focused_tag(id)
+            .and_then(|tag| self.window_registry.get_stack_mut(&LayoutScope { output: id, tag }))
+            .and_then(|stack| stack.focused())
+            .and_then(|wid| self.window_registry.get(&wid).map(|info| (wid, info.window.clone())));
+
+        match focused_window {
+            Some((wid, window)) => {
+                self.change_focus(wid, window);
+            }
+            None => {
+                let keyboard = self.seat.get_keyboard().unwrap();
+                let serial = SERIAL_COUNTER.next_serial();
+                keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+            }
+        }
     }
 
     pub fn undo_all_fullscreen(&mut self) -> Option<()> {
@@ -724,10 +871,37 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             Action::MoveUpStack => {
                 _ = self.focus_up();
             }
+            Action::FocusOutputLeft => {
+                self.focus_output_direction(crate::output::Direction::Left);
+            }
+            Action::FocusOutputRight => {
+                self.focus_output_direction(crate::output::Direction::Right);
+            }
+            Action::FocusOutputUp => {
+                self.focus_output_direction(crate::output::Direction::Up);
+            }
+            Action::FocusOutputDown => {
+                self.focus_output_direction(crate::output::Direction::Down);
+            }
 
 
         }
 
+    }
+}
+
+/// Returns 0 if the two 1D ranges `[a0, a0+al)` and `[b0, b0+bl)` overlap,
+/// otherwise the gap between them. Used to prefer outputs that line up with
+/// the current one on the axis perpendicular to the travel direction.
+fn axis_gap(a0: i32, al: i32, b0: i32, bl: i32) -> i32 {
+    let a1 = a0 + al;
+    let b1 = b0 + bl;
+    if a0 < b1 && b0 < a1 {
+        0
+    } else if b0 >= a1 {
+        b0 - a1
+    } else {
+        a0 - b1
     }
 }
 

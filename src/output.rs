@@ -103,6 +103,17 @@ impl OutputInfo {
     }
 }
 
+/// A cardinal direction used to pick the next output relative to the
+/// currently focused one, based on where each output sits in global
+/// (layout) space.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 #[derive(Clone, Copy,PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TagId(pub u32);
 #[derive(Clone, Copy,PartialEq, Eq, PartialOrd, Ord, Hash)]
