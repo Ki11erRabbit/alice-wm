@@ -48,6 +48,7 @@ impl<BackendData: Backend + 'static> XdgShellHandler for Alice<BackendData> {
             }
         };
         let output = info.id;
+        eprintln!("using display with id: {:?}", output.0);
         let focused_tag = match self.outputs.get_focused_tag(info.id) {
             Some(tag) => tag,
             None => TagId(0),
