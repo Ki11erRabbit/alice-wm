@@ -12,13 +12,14 @@ use smithay::{
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
             damage::OutputDamageTracker,
-            element::surface::WaylandSurfaceRenderElement,
+            element::{AsRenderElements, surface::WaylandSurfaceRenderElement},
             gles::GlesRenderer,
-            multigpu::{GpuManager, gbm::GbmGlesBackend},
+            multigpu::{GpuManager, MultiRenderer, gbm::GbmGlesBackend},
         },
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{UdevBackend, UdevEvent, primary_gpu},
     },
+    desktop::{Window, space::SpaceRenderElements},
     output::{Mode as WlMode, Output, PhysicalProperties, Subpixel},
     reexports::{
         calloop::{EventLoop, LoopHandle},
@@ -29,22 +30,26 @@ use smithay::{
     },
     utils::DeviceFd,
 };
+use smithay::desktop::space::OutputError;
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 
 use crate::{state::backend::Backend, Alice, CalloopData};
 
-type UdevRenderer<'a> = smithay::backend::renderer::multigpu::MultiRenderer<
+// ---------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------
+
+/// The renderer type used across the udev backend: a MultiRenderer that can
+/// render on one GPU and export buffers for scanout on another.
+type UdevRenderer<'a> = MultiRenderer<
     'a,
     'a,
     GbmGlesBackend<GlesRenderer, DrmDeviceFd>,
     GbmGlesBackend<GlesRenderer, DrmDeviceFd>,
 >;
 
-use smithay::{
-    backend::renderer::element::AsRenderElements,
-    desktop::{space::SpaceRenderElements, Window},
-};
-
+/// The concrete render element type produced when gathering a Space's
+/// contents for a given output under the udev backend.
 type UdevRenderElement<'a> =
     SpaceRenderElements<UdevRenderer<'a>, <Window as AsRenderElements<UdevRenderer<'a>>>::RenderElement>;
 
@@ -67,9 +72,34 @@ pub struct UdevData {
     pub primary_gpu: DrmNode,
     pub gpus: GpuManager<GbmGlesBackend<GlesRenderer, DrmDeviceFd>>,
     pub backends: HashMap<DrmNode, GpuBackendData>,
-    pub render_gbm_devices: HashMap<DrmNode, GbmDevice<DrmDeviceFd>>,  // new
+    /// GBM devices for GPUs that can render but have no display outputs of
+    /// their own (e.g. Apple's AGX under Asahi). Display-only devices (e.g.
+    /// DCP) borrow from here instead of opening a second fd on the same GPU.
+    pub render_gbm_devices: HashMap<DrmNode, GbmDevice<DrmDeviceFd>>,
     pub keyboards: Vec<smithay::reexports::input::Device>,
 }
+
+/// A KMS-capable device whose `DrmDevice` is already open, but which is
+/// waiting on a render-capable GPU to become available before it can finish
+/// building its allocator/DrmOutputManager. Held onto rather than dropped and
+/// reopened, since reopening the same device path in quick succession can
+/// fail under libseat.
+struct PendingKmsDevice {
+    node: DrmNode,
+    fd: DrmDeviceFd,
+    drm_device: DrmDevice,
+}
+
+const SUPPORTED_FORMATS: &[Fourcc] = &[
+    Fourcc::Argb2101010,
+    Fourcc::Abgr2101010,
+    Fourcc::Argb8888,
+    Fourcc::Abgr8888,
+];
+
+// ---------------------------------------------------------------------
+// Backend impl
+// ---------------------------------------------------------------------
 
 impl Backend for UdevData {
     const HAS_RELATIVE_MOTION: bool = false;
@@ -106,40 +136,49 @@ impl Backend for UdevData {
 
         let handle = event_loop.handle();
 
+        // Single pass: open + classify every device exactly once. KMS
+        // devices that can't finish yet get held (not dropped) in
+        // `pending_kms`, then drained once every render-only GPU on the
+        // system has had a chance to register.
         let udev_backend = UdevBackend::new(&seat_name)?;
-        let mut deferred: Vec<(dev_t, std::path::PathBuf)> = Vec::new();
+        let mut pending_kms: Vec<PendingKmsDevice> = Vec::new();
 
         for (device_id, path) in udev_backend.device_list() {
-            match device_added(&mut alice, &handle, device_id, &path) {
-                Ok(()) => {}
-                Err(err) if err.to_string().contains("No render-capable GPU available yet") => {
-                    deferred.push((device_id, path.to_path_buf()));
-                }
-                Err(err) => {
-                    eprintln!("Failed to add device {:?}: {}", device_id, err);
-                }
+            if let Err(err) = device_added(&mut alice, &handle, device_id, &path, &mut pending_kms) {
+                eprintln!("Failed to add device {:?}: {}", device_id, err);
             }
         }
 
-        // Second pass: by now every device that CAN register a render node has,
-        // regardless of what order udev originally handed them to us in.
-        for (device_id, path) in deferred {
-            if let Err(err) = device_added(&mut alice, &handle, device_id, &path) {
-                eprintln!("Failed to add device {:?} on retry: {}", device_id, err);
+        for pending in pending_kms {
+            let node = pending.node;
+            match finish_kms_device(&mut alice, pending.node, pending.fd, pending.drm_device) {
+                Ok(()) => device_changed(&mut alice, &handle, node),
+                Err(err) => eprintln!("Failed to finish display device {:?}: {}", node, err),
             }
         }
 
-        event_loop
-            .handle()
-            .insert_source(udev_backend, move |event, _, data| match event {
+        // A LoopHandle is cheaply Clone — capture our own clone into the
+        // closure so it's usable for the lifetime of the callback without
+        // needing to re-derive it from anything at call time.
+        let udev_handle = handle.clone();
+        event_loop.handle().insert_source(udev_backend, move |event, _, data| {
+            let mut pending_kms: Vec<PendingKmsDevice> = Vec::new();
+            match event {
                 UdevEvent::Added { device_id, path } => {
-                    if let Err(err) = device_added(&mut data.state, &handle, device_id, &path) {
+                    if let Err(err) = device_added(&mut data.state, &udev_handle, device_id, &path, &mut pending_kms) {
                         eprintln!("Failed to add device {:?}: {}", device_id, err);
+                    }
+                    for pending in pending_kms {
+                        let node = pending.node;
+                        match finish_kms_device(&mut data.state, pending.node, pending.fd, pending.drm_device) {
+                            Ok(()) => device_changed(&mut data.state, &udev_handle, node),
+                            Err(err) => eprintln!("Failed to finish display device {:?}: {}", node, err),
+                        }
                     }
                 }
                 UdevEvent::Changed { device_id } => {
                     if let Ok(node) = DrmNode::from_dev_id(device_id) {
-                        device_changed(&mut data.state, &handle, node);
+                        device_changed(&mut data.state, &udev_handle, node);
                     }
                 }
                 UdevEvent::Removed { device_id } => {
@@ -147,7 +186,8 @@ impl Backend for UdevData {
                         device_removed(&mut data.state, node);
                     }
                 }
-            })?;
+            }
+        })?;
 
         let mut libinput_context = Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(
             session.clone().into(),
@@ -209,18 +249,16 @@ impl Backend for UdevData {
     fn update_led_state(&mut self, _led_state: smithay::input::keyboard::LedState) {}
 }
 
-const SUPPORTED_FORMATS: &[Fourcc] = &[
-    Fourcc::Argb2101010,
-    Fourcc::Abgr2101010,
-    Fourcc::Argb8888,
-    Fourcc::Abgr8888,
-];
+// ---------------------------------------------------------------------
+// Device lifecycle
+// ---------------------------------------------------------------------
 
 pub fn device_added(
     alice: &mut Alice<UdevData>,
     event_loop: &LoopHandle<'static, CalloopData<UdevData>>,
     device_id: dev_t,
     path: &Path,
+    pending_kms: &mut Vec<PendingKmsDevice>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let node = DrmNode::from_dev_id(device_id)?;
 
@@ -232,102 +270,28 @@ pub fn device_added(
 
     match DrmDevice::new(fd.clone(), true) {
         Ok((drm_device, drm_notifier)) => {
-            // This device can do KMS — proceed as a display device (existing logic).
-            let (alloc_fd, render_node) = if let Some(own_render_node) =
-                node.node_with_type(NodeType::Render).and_then(|r| r.ok())
-            {
-                (fd.clone(), own_render_node)
-            } else if let Some(cached_gbm) = alice.backend_data.render_gbm_devices.get(&alice.backend_data.primary_gpu) {
-                // Reuse the already-opened render GPU's GBM device rather
-                // than opening a second fd on it.
-                let gbm = cached_gbm.clone();
-                let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
-                let render_node = alice.backend_data.primary_gpu;
-
-                if let Err(err) = alice.backend_data.gpus.as_mut().add_node(render_node, gbm.clone()) {
-                    eprintln!("Failed to add render node {:?}: {}", render_node, err);
-                }
-                let renderer_formats = alice
-                    .backend_data
-                    .gpus
-                    .single_renderer(&render_node)?
-                    .as_mut()
-                    .egl_context()
-                    .dmabuf_render_formats()
-                    .clone();
-                let drm_output_manager = DrmOutputManager::new(
-                    drm_device,
-                    allocator,
-                    GbmFramebufferExporter::new(gbm.clone(), render_node.into()),
-                    Some(gbm),
-                    SUPPORTED_FORMATS.iter().copied(),
-                    renderer_formats,
-                );
-                event_loop.insert_source(drm_notifier, move |event, meta, data| match event {
-                    DrmEvent::VBlank(crtc) => frame_finish(&mut data.state, node, crtc, meta),
-                    DrmEvent::Error(err) => eprintln!("DRM error on device {:?}: {}", node, err),
-                })?;
-                alice.backend_data.backends.insert(
-                    node,
-                    GpuBackendData {
-                        drm_output_manager,
-                        drm_scanner: DrmScanner::new(),
-                        render_node: Some(render_node),
-                        surfaces: HashMap::new(),
-                    },
-                );
-                device_changed(alice, event_loop, node);
-                return Ok(());
-            } else {
-                return Err("No render-capable GPU available yet for this display-only device".into());
-            };
-
-            // ...unchanged: gbm = GbmDevice::new(alloc_fd)?; allocator = ...; add_node; etc.
-            let gbm = GbmDevice::new(alloc_fd)?;
-            let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING);
-
-            if let Err(err) = alice.backend_data.gpus.as_mut().add_node(render_node, gbm.clone()) {
-                eprintln!("Failed to add render node {:?}: {}", render_node, err);
-            }
-            let renderer_formats = alice
-                .backend_data
-                .gpus
-                .single_renderer(&render_node)?
-                .as_mut()
-                .egl_context()
-                .dmabuf_render_formats()
-                .clone();
-            let drm_output_manager = DrmOutputManager::new(
-                drm_device,
-                allocator,
-                GbmFramebufferExporter::new(gbm.clone(), render_node.into()),
-                Some(gbm),
-                SUPPORTED_FORMATS.iter().copied(),
-                renderer_formats,
-            );
             event_loop.insert_source(drm_notifier, move |event, meta, data| match event {
                 DrmEvent::VBlank(crtc) => frame_finish(&mut data.state, node, crtc, meta),
                 DrmEvent::Error(err) => eprintln!("DRM error on device {:?}: {}", node, err),
             })?;
-            alice.backend_data.backends.insert(
-                node,
-                GpuBackendData {
-                    drm_output_manager,
-                    drm_scanner: DrmScanner::new(),
-                    render_node: Some(render_node),
-                    surfaces: HashMap::new(),
-                },
-            );
-            device_changed(alice, event_loop, node);
+
+            let render_node_ready = node.node_with_type(NodeType::Render).and_then(|r| r.ok()).is_some()
+                || alice
+                    .backend_data
+                    .render_gbm_devices
+                    .contains_key(&alice.backend_data.primary_gpu);
+
+            if render_node_ready {
+                finish_kms_device(alice, node, fd, drm_device)?;
+                device_changed(alice, event_loop, node);
+            } else {
+                pending_kms.push(PendingKmsDevice { node, fd, drm_device });
+            }
             Ok(())
         }
         Err(_) => {
-            // No KMS capability (e.g. AGX) — that's fine if it can still render.
+            // No KMS capability — register as a render-only GPU (e.g. AGX).
             let gbm = GbmDevice::new(fd)?;
-
-            // Key by the *render*-type node, so this matches what primary_gpu
-            // (also render-type) resolves to, and what display-only devices
-            // will look up later.
             let render_node = node
                 .node_with_type(NodeType::Render)
                 .and_then(|r| r.ok())
@@ -341,6 +305,68 @@ pub fn device_added(
             Ok(())
         }
     }
+}
+
+/// Finishes setting up a KMS device once a render-capable GPU is known to be
+/// available — builds the allocator, registers with GpuManager, and
+/// constructs the DrmOutputManager. Takes an already-open fd/DrmDevice;
+/// never opens anything itself.
+fn finish_kms_device(
+    alice: &mut Alice<UdevData>,
+    node: DrmNode,
+    fd: DrmDeviceFd,
+    drm_device: DrmDevice,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (gbm, render_node) = if let Some(own_render_node) =
+        node.node_with_type(NodeType::Render).and_then(|r| r.ok())
+    {
+        (GbmDevice::new(fd)?, own_render_node)
+    } else {
+        let primary = alice.backend_data.primary_gpu;
+        let cached_gbm = alice
+            .backend_data
+            .render_gbm_devices
+            .get(&primary)
+            .ok_or("expected a cached render GPU by this point")?
+            .clone();
+        (cached_gbm, primary)
+    };
+
+    let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
+
+    if let Err(err) = alice.backend_data.gpus.as_mut().add_node(render_node, gbm.clone()) {
+        eprintln!("Failed to add render node {:?}: {}", render_node, err);
+    }
+
+    let renderer_formats = alice
+        .backend_data
+        .gpus
+        .single_renderer(&render_node)?
+        .as_mut()
+        .egl_context()
+        .dmabuf_render_formats()
+        .clone();
+
+    let drm_output_manager = DrmOutputManager::new(
+        drm_device,
+        allocator,
+        GbmFramebufferExporter::new(gbm.clone(), render_node.into()),
+        Some(gbm),
+        SUPPORTED_FORMATS.iter().copied(),
+        renderer_formats,
+    );
+
+    alice.backend_data.backends.insert(
+        node,
+        GpuBackendData {
+            drm_output_manager,
+            drm_scanner: DrmScanner::new(),
+            render_node: Some(render_node),
+            surfaces: HashMap::new(),
+        },
+    );
+
+    Ok(())
 }
 
 pub fn device_changed(alice: &mut Alice<UdevData>, event_loop: &LoopHandle<'static, CalloopData<UdevData>>, node: DrmNode) {
@@ -367,7 +393,7 @@ pub fn device_changed(alice: &mut Alice<UdevData>, event_loop: &LoopHandle<'stat
             _ => {}
         }
     }
-    let _ = event_loop; // reserved for future use (e.g. re-registering per-output sources)
+    let _ = event_loop;
 }
 
 fn connector_connected(alice: &mut Alice<UdevData>, node: DrmNode, connector: connector::Info, crtc: crtc::Handle) {
@@ -426,7 +452,7 @@ fn connector_connected(alice: &mut Alice<UdevData>, node: DrmNode, connector: co
     let Ok(mut renderer) = alice.backend_data.gpus.single_renderer(&render_node) else {
         return;
     };
-    let empty_elements: &[WaylandSurfaceRenderElement<UdevRenderer<'_>>] = &[];
+
     match backend.drm_output_manager.initialize_output(
         crtc,
         drm_mode,
@@ -445,6 +471,8 @@ fn connector_connected(alice: &mut Alice<UdevData>, node: DrmNode, connector: co
                     output: output.clone(),
                 },
             );
+            drop(renderer);
+            render_surface(alice, node, crtc);
         }
         Err(err) => {
             eprintln!("Failed to initialize output on crtc {:?}: {}", crtc, err);
@@ -465,19 +493,25 @@ fn connector_disconnected(alice: &mut Alice<UdevData>, node: DrmNode, _connector
 }
 
 pub fn device_removed(alice: &mut Alice<UdevData>, node: DrmNode) {
-    let Some(backend) = alice.backend_data.backends.remove(&node) else {
-        return;
-    };
-
-    for (_, surface) in backend.surfaces {
-        alice.outputs.deactivate(&surface.output.name());
-        alice.space.unmap_output(&surface.output);
+    if let Some(backend) = alice.backend_data.backends.remove(&node) {
+        for (_, surface) in backend.surfaces {
+            alice.outputs.deactivate(&surface.output.name());
+            alice.space.unmap_output(&surface.output);
+        }
+        if let Some(render_node) = backend.render_node {
+            alice.backend_data.gpus.as_mut().remove_node(&render_node);
+        }
     }
 
-    if let Some(render_node) = backend.render_node {
-        alice.backend_data.gpus.as_mut().remove_node(&render_node);
+    // If this was a render-only GPU (e.g. AGX unplugged, external eGPU, etc.)
+    if alice.backend_data.render_gbm_devices.remove(&node).is_some() {
+        alice.backend_data.gpus.as_mut().remove_node(&node);
     }
 }
+
+// ---------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------
 
 pub fn frame_finish(
     alice: &mut Alice<UdevData>,
@@ -500,8 +534,6 @@ pub fn frame_finish(
     render_surface(alice, node, crtc);
 }
 
-use smithay::desktop::space::OutputError;
-
 fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle) {
     let Some(render_node) = alice.backend_data.backends.get(&node).and_then(|b| b.render_node) else {
         return;
@@ -523,20 +555,15 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     };
     let output = surface.output.clone();
 
-    // No explicit type annotation needed — inferred from `renderer`'s concrete
-    // type and `alice.space: Space<Window>`. `alpha` here is opacity (1.0 =
-    // fully opaque), not a scale factor.
-    let elements = match alice.space.render_elements_for_output(&mut renderer, &output, 1.0) {
-        Ok(elements) => elements,
-        Err(OutputError::Unmapped) => {
-            // Output isn't mapped into the space yet/anymore — nothing to draw.
-            return;
-        }
-        Err(err) => {
-            eprintln!("Failed to gather render elements for {:?}: {:?}", output.name(), err);
-            return;
-        }
-    };
+    let elements: Vec<UdevRenderElement<'_>> =
+        match alice.space.render_elements_for_output(&mut renderer, &output, 1.0) {
+            Ok(elements) => elements,
+            Err(OutputError::Unmapped) => return,
+            Err(err) => {
+                eprintln!("Failed to gather render elements for {:?}: {:?}", output.name(), err);
+                return;
+            }
+        };
 
     match surface
         .drm_output
