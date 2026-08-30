@@ -52,6 +52,7 @@ impl<BackendData: Backend + 'static> XdgShellHandler for Alice<BackendData> {
             Some(tag) => tag,
             None => TagId(0),
         };
+        eprintln!("new_toplevel: assigning to output={:?} tag={:?}", output.0, focused_tag.0);
         let window = Window::new_wayland_window(surface);
 
         let id = self.window_registry.insert(WindowInfo::new(focused_tag, info.id, window.clone()));

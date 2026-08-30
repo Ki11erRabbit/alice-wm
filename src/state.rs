@@ -502,6 +502,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
     pub fn change_tag(&mut self, tag: TagId) -> Option<()> {
         let old_tag = self.outputs.current_focused_tag()?;
+        eprintln!("change_tag: old_tag={} requested_new_tag={}", old_tag.0, tag.0);
 
         for id in self.window_registry.filter(&LayoutScope {
             output: self.outputs.get_focused().id,
@@ -646,6 +647,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 let Some(info) = self.window_registry.get_focused() else {
                     return;
                 };
+                eprintln!("Close: closing window on tag={}", info.tag.0);
                 if let Some(toplevel) = info.window.toplevel() {
                     toplevel.send_close();
                 }
