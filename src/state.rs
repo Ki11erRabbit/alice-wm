@@ -281,7 +281,9 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
     }
 
     fn apply_rects(&mut self, id: WindowId, rect: Rect) {
-        let window = self.window_registry.get(&id).unwrap();
+        let Some(window) = self.window_registry.get(&id) else {
+            return;
+        };
         window.window.toplevel().unwrap().with_pending_state(|state| {
             state.size = Some((rect.width, rect.height).into());
             if window.fullscreen {
