@@ -414,7 +414,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             stack.move_down();
         }
         stack.change_focus(id);
-        self.window_registry.change_focus(id);
+        self.window_registry.change_focus(Some(id));
 
         let keyboard = self.seat.get_keyboard().unwrap();
         let serial = SERIAL_COUNTER.next_serial();
@@ -510,14 +510,19 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             let window = self.window_registry.get(&id)?;
             self.space.unmap_elem(&window.window);
         }
+        let mut no_windows = true;
         for id in self.window_registry.filter(&LayoutScope {
             output: self.outputs.get_focused().id,
             tag,
         }) {
+            no_windows = false;
             let window = self.window_registry.get(&id)?;
             self.space.map_element(window.window.clone(), (0,0), false);
         }
         self.outputs.change_tag(tag);
+        if no_windows == true {
+            self.window_registry.change_focus(None);
+        }
         self.relayout(Some(LayoutScope {
             output: self.outputs.get_focused().id,
             tag,
@@ -649,15 +654,17 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     tag: info.tag,
                 }).collect::<Vec<_>>();
                 for id in ids {
-                    if id != self.window_registry.focused_window() {
-                        self.window_registry.change_focus(id);
+                    if Some(id) != self.window_registry.focused_window() {
+                        self.window_registry.change_focus(Some(id));
                         break;
                     }
                 }
             }
             Action::FullScreen => {
-                let id = self.window_registry.focused_window();
-                _ = self.toggle_fullscreen(id);
+                self.window_registry.focused_window()
+                    .and_then(|id| {
+                        self.toggle_fullscreen(id)
+                    });
             }
             Action::Spawn(command) => {
                 self.spawn(&command);

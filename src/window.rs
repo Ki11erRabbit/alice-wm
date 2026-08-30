@@ -144,7 +144,7 @@ pub struct WindowRegistry {
     order: HashMap<LayoutScope, LayoutInfo>,
     /// This field is to satisfy the typechecker on WindowRegistry::filter
     empty: Vec<WindowId>,
-    focused_window: WindowId,
+    focused_window: Option<WindowId>,
 }
 
 impl WindowRegistry {
@@ -155,7 +155,7 @@ impl WindowRegistry {
             next_window_id: WindowId(0),
             order: HashMap::new(),
             empty: Vec::new(),
-            focused_window: WindowId(0),
+            focused_window: None,
         }
     }
 
@@ -178,6 +178,7 @@ impl WindowRegistry {
         })
         .or_insert(LayoutInfo::new(vec![id]));
         self.map.insert(id, info);
+        self.focused_window = Some(id);
         id
     }
 
@@ -193,6 +194,9 @@ impl WindowRegistry {
             };
 
             layout.remove_window(id);
+        }
+        if self.focused_window == Some(id) {
+            self.focused_window = None;
         }
     }
 
@@ -226,17 +230,20 @@ impl WindowRegistry {
         self.order.get_mut(scope)
     }
 
-    pub fn change_focus(&mut self,id: WindowId) {
+    pub fn change_focus(&mut self, id: Option<WindowId>) {
         self.focused_window = id;
     }
 
     pub fn get_focused(&self) -> Option<&WindowInfo> {
-        self.get(&self.focused_window)
+        self.focused_window.and_then(|id| {
+            self.get(&id)
+        })
     }
 
     pub fn get_focused_mut(&mut self) -> Option<&mut WindowInfo> {
-        let focused_window = self.focused_window;
-        self.get_mut(&focused_window)
+        self.focused_window.and_then(|id| {
+            self.get_mut(&id)
+        })
     }
 
     pub fn stack_entry(
@@ -246,7 +253,7 @@ impl WindowRegistry {
         self.order.entry(scope)
     }
 
-    pub fn focused_window(&self) -> WindowId {
+    pub fn focused_window(&self) -> Option<WindowId> {
         self.focused_window
     }
 }
