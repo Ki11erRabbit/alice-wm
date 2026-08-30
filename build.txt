@@ -1,0 +1,680 @@
+   Compiling alice-wm v0.1.0 (/home/ki11errabbit/Projects/Programming-Projects/Rust/alice-wm)
+error: expected identifier, found reserved identifier `_`
+   --> src/state/backend/udev.rs:468:9
+    |
+468 |         _,
+    |         ^ expected identifier, found reserved identifier
+
+error: expected one of `!`, `.`, `::`, `;`, `?`, `else`, `{`, or an operator, found `,`
+   --> src/state/backend/udev.rs:468:10
+    |
+468 |         _,
+    |          ^ expected one of 8 possible tokens
+
+error[E0252]: the name `Path` is defined multiple times
+ --> src/state/backend/udev.rs:6:5
+  |
+1 | use std::{collections::HashMap, os::unix::raw::dev_t, path::Path, time::Duration};
+  |                                                       ---------- previous import of the type `Path` here
+...
+6 | use std::path::Path;
+  |     ^^^^^^^^^^^^^^^ `Path` reimported here
+  |
+  = note: `Path` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `GbmFramebufferExporter` is defined multiple times
+  --> src/state/backend/udev.rs:11:39
+   |
+ 3 | ...gbm::GbmAllocator, drm::{DrmDevice, DrmDeviceFd, DrmNode, NodeType, exporter::gbm::GbmFramebufferExporter, o...
+   |                                                                        ------------------------------------- previous import of the type `GbmFramebufferExporter` here
+...
+11 | ...s, exporter::gbm::GbmFramebufferExporter, DrmDevice, DrmEvent},
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^--
+   |       |
+   |       `GbmFramebufferExporter` reimported here
+   |       help: remove unnecessary import
+   |
+   = note: `GbmFramebufferExporter` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `DrmDevice` is defined multiple times
+  --> src/state/backend/udev.rs:11:78
+   |
+ 3 | ...::GbmAllocator, drm::{DrmDevice, DrmDeviceFd, DrmNode, NodeType, exporter::gbm::GbmFramebufferExporter, ...
+   |                          --------- previous import of the type `DrmDevice` here
+...
+11 | ...exporter::gbm::GbmFramebufferExporter, DrmDevice, DrmEvent},
+   |                                           ^^^^^^^^^--
+   |                                           |
+   |                                           `DrmDevice` reimported here
+   |                                           help: remove unnecessary import
+   |
+   = note: `DrmDevice` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `OutputDamageTracker` is defined multiple times
+  --> src/state/backend/udev.rs:12:9
+   |
+ 3 | ...mithay::{backend::{allocator::gbm::GbmAllocator, drm::{DrmDevice, DrmDeviceFd, DrmNode, NodeType, exporter::gbm::GbmFramebufferExporter, output::{DrmOutput, DrmOutputManager}}, input::InputEvent, libinput::{LibinputInputBackend, LibinputSessionInterface}, renderer::{ImportMemWl, damage::OutputDamageTracker, g...
+   |                                                                                                                                                                                                                                                                                            --------------------------- previous import of the type `OutputDamageTracker` here
+...
+12 | ...   renderer::damage::OutputDamageTracker,
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-
+   |       |
+   |       `OutputDamageTracker` reimported here
+   |       help: remove unnecessary import
+   |
+   = note: `OutputDamageTracker` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `UdevEvent` is defined multiple times
+  --> src/state/backend/udev.rs:13:9
+   |
+ 3 | ...mithay::{backend::{allocator::gbm::GbmAllocator, drm::{DrmDevice, DrmDeviceFd, DrmNode, NodeType, exporter::gbm::GbmFramebufferExporter, output::{DrmOutput, DrmOutputManager}}, input::InputEvent, libinput::{LibinputInputBackend, LibinputSessionInterface}, renderer::{ImportMemWl, damage::OutputDamageTracker, gles::GlesRenderer, multigpu::{GpuManager, gbm::{GbmGlesBackend, GbmGlesDevice}}}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, UdevEvent, p...
+   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                             --------- previous import of the type `UdevEvent` here
+...
+13 | ...   udev::UdevEvent,
+   |       ^^^^^^^^^^^^^^^-
+   |       |
+   |       `UdevEvent` reimported here
+   |       help: remove unnecessary import
+   |
+   = note: `UdevEvent` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `Output` is defined multiple times
+  --> src/state/backend/udev.rs:15:30
+   |
+ 3 | ...locator::gbm::GbmAllocator, drm::{DrmDevice, DrmDeviceFd, DrmNode, NodeType, exporter::gbm::GbmFramebufferExporter, output::{DrmOutput, DrmOutputManager}}, input::InputEvent, libinput::{LibinputInputBackend, LibinputSessionInterface}, renderer::{ImportMemWl, damage::OutputDamageTracker, gles::GlesRenderer, multigpu::{GpuManager, gbm::{GbmGlesBackend, GbmGlesDevice}}}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, UdevEvent, primary_gpu}}, output::Output, r...
+   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  -------------- previous import of the type `Output` here
+...
+15 | ...e, Output, PhysicalProperties, Subpixel},
+   |       ^^^^^^--
+   |       |
+   |       `Output` reimported here
+   |       help: remove unnecessary import
+   |
+   = note: `Output` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `LoopHandle` is defined multiple times
+  --> src/state/backend/udev.rs:17:9
+   |
+ 3 | ...mithay::{backend::{allocator::gbm::GbmAllocator, drm::{DrmDevice, DrmDeviceFd, DrmNode, NodeType, exporter::gbm::GbmFramebufferExporter, output::{DrmOutput, DrmOutputManager}}, input::InputEvent, libinput::{LibinputInputBackend, LibinputSessionInterface}, renderer::{ImportMemWl, damage::OutputDamageTracker, gles::GlesRenderer, multigpu::{GpuManager, gbm::{GbmGlesBackend, GbmGlesDevice}}}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, UdevEvent, primary_gpu}}, output::Output, reexports::{calloop::{EventLoop, LoopHandle}, ...
+   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        ---------- previous import of the type `LoopHandle` here
+...
+17 | ...   calloop::LoopHandle,
+   |       ^^^^^^^^^^^^^^^^^^^-
+   |       |
+   |       `LoopHandle` reimported here
+   |       help: remove unnecessary import
+   |
+   = note: `LoopHandle` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `connector` is defined multiple times
+  --> src/state/backend/udev.rs:18:24
+   |
+ 3 | ...d::{allocator::gbm::GbmAllocator, drm::{DrmDevice, DrmDeviceFd, DrmNode, NodeType, exporter::gbm::GbmFramebufferExporter, output::{DrmOutput, DrmOutputManager}}, input::InputEvent, libinput::{LibinputInputBackend, LibinputSessionInterface}, renderer::{ImportMemWl, damage::OutputDamageTracker, gles::GlesRenderer, multigpu::{GpuManager, gbm::{GbmGlesBackend, GbmGlesDevice}}}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, UdevEvent, primary_gpu}}, output::Output, reexports::{calloop::{EventLoop, LoopHandle}, drm::control::{connector, c...
+   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     --------- previous import of the module `connector` here
+...
+18 | ...::{connector, ModeTypeFlags},
+   |       ^^^^^^^^^--
+   |       |
+   |       `connector` reimported here
+   |       help: remove unnecessary import
+   |
+   = note: `connector` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `OFlags` is defined multiple times
+  --> src/state/backend/udev.rs:19:9
+   |
+ 3 | ...mithay::{backend::{allocator::gbm::GbmAllocator, drm::{DrmDevice, DrmDeviceFd, DrmNode, NodeType, exporter::gbm::GbmFramebufferExporter, output::{DrmOutput, DrmOutputManager}}, input::InputEvent, libinput::{LibinputInputBackend, LibinputSessionInterface}, renderer::{ImportMemWl, damage::OutputDamageTracker, gles::GlesRenderer, multigpu::{GpuManager, gbm::{GbmGlesBackend, GbmGlesDevice}}}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, UdevEvent, primary_gpu}}, output::Output, reexports::{calloop::{EventLoop, LoopHandle}, drm::control::{connector, crtc}, input::{DeviceCapability, Libinput}, rustix::fs::OFlags, u...
+   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           ------------------ previous import of the type `OFlags` here
+...
+19 | ...   rustix::fs::OFlags,
+   |       ^^^^^^^^^^^^^^^^^^-
+   |       |
+   |       `OFlags` reimported here
+   |       help: remove unnecessary import
+   |
+   = note: `OFlags` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `DeviceFd` is defined multiple times
+  --> src/state/backend/udev.rs:21:5
+   |
+ 3 | use smithay::{backend::{allocator::gbm::GbmAllocator, drm::{DrmDevice, DrmDeviceFd, DrmNode, NodeType, exporter::gbm::GbmFramebufferExporter, output::{DrmOutput, DrmOutputManager}}, input::InputEvent, libinput::{LibinputInputBackend, LibinputSessionInterface}, renderer::{ImportMemWl, damage::OutputDamageTracker, gles::GlesRenderer, multigpu::{GpuManager, gbm::{GbmGlesBackend, GbmGlesDevice}}}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, UdevEvent, primary_gpu}}, output::Output, reexports::{calloop::{EventLoop, LoopHandle}, drm::control::{connector, crtc}, input::{DeviceCapability, Libinput}, rustix::fs::OFlags, udev::ffi::udev_device_new_from_device_id, wayland_server::Display}, utils::DeviceFd};
+   |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      --------------- previous import of the type `DeviceFd` here
+...
+21 |     utils::DeviceFd,
+   |     ^^^^^^^^^^^^^^^-
+   |     |
+   |     `DeviceFd` reimported here
+   |     help: remove unnecessary import
+   |
+   = note: `DeviceFd` must be defined only once in the type namespace of this module
+
+error[E0252]: the name `crtc` is defined multiple times
+   --> src/state/backend/udev.rs:412:5
+    |
+  3 | use smithay::{backend::{allocator::gbm::GbmAllocator, drm::{DrmDevice, DrmDeviceFd, DrmNode, NodeType, exporter::gbm::GbmFramebufferExporter, output::{DrmOutput, DrmOutputManager}}, input::InputEvent, libinput::{LibinputInputBackend, LibinputSessionInterface}, renderer::{ImportMemWl, damage::OutputDamageTracker, gles::GlesRenderer, multigpu::{GpuManager, gbm::{GbmGlesBackend, GbmGlesDevice}}}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, UdevEvent, primary_gpu}}, output::Output, reexports::{calloop::{EventLoop, LoopHandle}, drm::control::{connector, crtc}, ...
+    |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 ---- previous import of the module `crtc` here
+...
+412 |     reexports::drm::control::crtc,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^-
+    |     |
+    |     `crtc` reimported here
+    |     help: remove unnecessary import
+    |
+    = note: `crtc` must be defined only once in the type namespace of this module
+
+error: 1 positional argument in format string, but no arguments were given
+   --> src/state/backend/udev.rs:137:71
+    |
+137 |                         eprintln!("Failed to resume libinput context: {:?}, err");
+    |                                                                       ^^^^
+
+warning: unused import: `winit::WinitData`
+ --> src/handlers/compositor.rs:1:80
+  |
+1 | use crate::{Alice, grabs::resize_grab, state::{ClientState, backend::{Backend, winit::WinitData}}};
+  |                                                                                ^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `winit::WinitData`
+  --> src/handlers/xdg_shell.rs:26:113
+   |
+26 | ...outScope, TagId}, state::backend::{Backend, winit::WinitData}, window::WindowInfo
+   |                                                ^^^^^^^^^^^^^^^^
+
+warning: unused import: `smithay::wayland::shell::xdg::PopupSurface`
+ --> src/handlers/wlr_shell.rs:3:5
+  |
+3 | use smithay::wayland::shell::xdg::PopupSurface;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::state::backend::winit::WinitData`
+  --> src/handlers/wlr_shell.rs:12:5
+   |
+12 | use crate::state::backend::winit::WinitData;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::state::backend::winit::WinitData`
+ --> src/handlers/mod.rs:7:5
+  |
+7 | use crate::state::backend::winit::WinitData;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Keysym`
+ --> src/input.rs:6:34
+  |
+6 |         keyboard::{FilterResult, Keysym},
+  |                                  ^^^^^^
+
+warning: unused import: `output::TagId`
+  --> src/input.rs:13:13
+   |
+13 | use crate::{output::TagId, state::{Alice, backend::Backend}};
+   |             ^^^^^^^^^^^^^
+
+warning: unused imports: `DeviceCapability`, `DisplayHandle`, `DrmNode`, `InputEvent`, `LibinputInputBackend`, `LibinputSessionInterface`, `NodeType`, `Session`, `UdevBackend`, `input::Libinput`, `libseat::LibSeatSession`, and `primary_gpu`
+ --> src/state/backend/winit.rs:4:31
+  |
+4 | ...::{drm::{DrmNode, NodeType}, input::{DeviceCapability, InputEvent}, libinput::{LibinputInputBackend, LibinputSessionInterface}, renderer::{damage::OutputDamageTracker, element::surface::WaylandSurfaceRenderElement, gles::GlesRenderer}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, primary_gpu}, ...
+  |             ^^^^^^^  ^^^^^^^^           ^^^^^^^^^^^^^^^^  ^^^^^^^^^^              ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^                                                                                                                         ^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^          ^^^^^^^^^^^  ^^^^^^^^^^^
+5 | ...p, input::Libinput, wayland_server::{Display, DisplayHandle, protocol::wl_surface}
+  |       ^^^^^^^^^^^^^^^                            ^^^^^^^^^^^^^
+
+warning: unused import: `time::Duration`
+ --> src/state/backend/udev.rs:1:67
+  |
+1 | use std::{collections::HashMap, os::unix::raw::dev_t, path::Path, time::Duration};
+  |                                                                   ^^^^^^^^^^^^^^
+
+warning: unused imports: `GbmGlesDevice` and `udev::ffi::udev_device_new_from_device_id`
+ --> src/state/backend/udev.rs:3:380
+  |
+3 | ...d, GbmGlesDevice}}}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, UdevEvent, primary_gpu}}, output::Output, reexports::{calloop::{EventLoop, LoopHandle}, drm::control::{connector, crtc}, input::{DeviceCapability, Libinput}, rustix::fs::OFlags, udev::ffi::udev_device_new_from_device_id, w...
+  |       ^^^^^^^^^^^^^                                                                                                                                                                                                                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::path::Path`
+ --> src/state/backend/udev.rs:6:5
+  |
+6 | use std::path::Path;
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused imports: `DrmDevice`, `Output`, `calloop::LoopHandle`, `compositor::FrameFlags`, `connector`, `exporter::gbm::GbmFramebufferExporter`, `renderer::damage::OutputDamageTracker`, `rustix::fs::OFlags`, `udev::UdevEvent`, and `utils::DeviceFd`
+  --> src/state/backend/udev.rs:11:15
+   |
+11 |         drm::{compositor::FrameFlags, exporter::gbm::GbmFramebufferExporter, DrmDevice, DrmEvent},
+   |               ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^
+12 |         renderer::damage::OutputDamageTracker,
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+13 |         udev::UdevEvent,
+   |         ^^^^^^^^^^^^^^^
+14 |     },
+15 |     output::{Mode as WlMode, Output, PhysicalProperties, Subpixel},
+   |                              ^^^^^^
+16 |     reexports::{
+17 |         calloop::LoopHandle,
+   |         ^^^^^^^^^^^^^^^^^^^
+18 |         drm::control::{connector, ModeTypeFlags},
+   |                        ^^^^^^^^^
+19 |         rustix::fs::OFlags,
+   |         ^^^^^^^^^^^^^^^^^^
+20 |     },
+21 |     utils::DeviceFd,
+   |     ^^^^^^^^^^^^^^^
+
+warning: unnecessary trailing semicolon
+   --> src/state/backend/udev.rs:132:60
+    |
+132 |                         backend.drm_output_manager.pause();;
+    |                                                            ^ help: remove this semicolon
+    |
+    = note: `#[warn(redundant_semicolons)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `damage::RenderOutputResult`, `element::surface::WaylandSurfaceRenderElement`, and `reexports::drm::control::crtc`
+   --> src/state/backend/udev.rs:408:13
+    |
+408 |             damage::RenderOutputResult,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+409 |             element::surface::WaylandSurfaceRenderElement,
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+412 |     reexports::drm::control::crtc,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Display`
+ --> src/state/backend.rs:4:107
+  |
+4 | ...reexports::{calloop::EventLoop, wayland_server::{Display, protocol::wl_surface}}};
+  |                                                     ^^^^^^^
+
+warning: unused import: `Alice`
+ --> src/state/backend.rs:6:13
+  |
+6 | use crate::{Alice, CalloopData};
+  |             ^^^^^
+
+warning: unused imports: `AsRenderElements`, `RenderElement`, `Renderer`, and `space::space_render_elements`
+ --> src/state.rs:6:25
+  |
+6 | ...::{Renderer, element::{AsRenderElements, RenderElement}}, desktop::{PopupManager, Space, Window, WindowSurfaceType, layer_map_for_output, space::space_render_elements}, ...
+  |       ^^^^^^^^            ^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^                                                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `layer_map_for_output`
+ --> src/layer.rs:3:61
+  |
+3 | use smithay::desktop::{LayerSurface as DesktopLayerSurface, layer_map_for_output};
+  |                                                             ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::Alice`
+ --> src/layer.rs:7:5
+  |
+7 | use crate::Alice;
+  |     ^^^^^^^^^^^^
+
+warning: unused import: `LayoutScope`
+ --> src/layer.rs:8:21
+  |
+8 | use crate::output::{LayoutScope, OutputId};
+  |                     ^^^^^^^^^^^
+
+warning: unused imports: `DeviceCapability`, `Display`, `DrmNode`, `InputEvent`, `LibinputInputBackend`, `LibinputSessionInterface`, `Mode`, `NodeType`, `Output`, `PhysicalProperties`, `Scale`, `Session`, `Subpixel`, `UdevBackend`, `input::Libinput`, `libseat::LibSeatSession`, `primary_gpu`, and `utils::Transform`
+  --> src/main.rs:15:31
+   |
+15 | use smithay::{backend::{drm::{DrmNode, NodeType}, input::{DeviceCapability, InputEvent}, libinput::{LibinputInputBackend, LibinputSessionInterface}, session::{Session, libseat::LibSeatSession}, udev::{UdevBackend, primary_gpu}}, output::{Mode, Output, PhysicalProperties, Scale, Subpixel}, ...
+   |                               ^^^^^^^  ^^^^^^^^           ^^^^^^^^^^^^^^^^  ^^^^^^^^^^              ^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^             ^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^          ^^^^^^^^^^^  ^^^^^^^^^^^             ^^^^  ^^^^^^  ^^^^^^^^^^^^^^^^^^  ^^^^^  ^^^^^^^^
+16 |     calloop::EventLoop, input::Libinput, wayland_server::{Display, DisplayHandle}
+   |                         ^^^^^^^^^^^^^^^                   ^^^^^^^
+17 | }, utils::Transform};
+   |    ^^^^^^^^^^^^^^^^
+
+warning: unused import: `smithay::backend::session::Event as SessionEvent`
+  --> src/main.rs:29:9
+   |
+29 |     use smithay::backend::session::Event as SessionEvent;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated type alias `std::os::unix::raw::dev_t`: these type aliases are no longer supported by the standard library, the `libc` crate on crates.io should be used instead for the correct definitions
+ --> src/state/backend/udev.rs:1:48
+  |
+1 | use std::{collections::HashMap, os::unix::raw::dev_t, path::Path, time::Duration};
+  |                                                ^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `std::os::unix::raw::dev_t`: these type aliases are no longer supported by the standard library, the `libc` crate on crates.io should be used instead for the correct definitions
+   --> src/state/backend/udev.rs:181:16
+    |
+181 |     device_id: dev_t,
+    |                ^^^^^
+
+error[E0107]: struct takes 4 generic arguments but 1 generic argument was supplied
+  --> src/state/backend/udev.rs:29:29
+   |
+29 |     pub drm_output_manager: DrmOutputManager<GbmAllocator<DrmDeviceFd>>,
+   |                             ^^^^^^^^^^^^^^^^ ------------------------- supplied 1 generic argument
+   |                             |
+   |                             expected 4 generic arguments
+   |
+note: struct defined here, with 4 generic parameters: `A`, `F`, `U`, `G`
+  --> /home/ki11errabbit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/backend/drm/output.rs:46:12
+   |
+46 | pub struct DrmOutputManager<A, F, U, G>
+   |            ^^^^^^^^^^^^^^^^ -  -  -  -
+help: add missing generic arguments
+   |
+29 |     pub drm_output_manager: DrmOutputManager<GbmAllocator<DrmDeviceFd>, F, U, G>,
+   |                                                                       +++++++++
+
+warning: unreachable statement
+  --> src/handlers/xdg_shell.rs:81:9
+   |
+80 |           return;
+   |           ------ any code following this expression is unreachable
+81 | /         surface.with_pending_state(|state| {
+82 | |             let geometry = positioner.get_geometry();
+83 | |             state.geometry = geometry;
+84 | |             state.positioner = positioner;
+85 | |         });
+   | |___________^ unreachable statement
+   |
+   = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable statement
+  --> src/handlers/xdg_shell.rs:92:9
+   |
+91 |         return;
+   |         ------ any code following this expression is unreachable
+92 |         let seat = Seat::from_resource(&seat).unwrap();
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src/handlers/xdg_shell.rs:125:9
+    |
+124 |         return;
+    |         ------ any code following this expression is unreachable
+125 |         let seat = Seat::from_resource(&seat).unwrap();
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+error[E0061]: this function takes 4 arguments but 3 arguments were supplied
+   --> src/state/backend/udev.rs:82:13
+    |
+ 82 |             device_added(&mut alice, device_id, &path)?;
+    |             ^^^^^^^^^^^^             --------- argument #2 of type `&LoopHandle<'static, CalloopData<UdevData>>` is missing
+    |
+note: function defined here
+   --> src/state/backend/udev.rs:178:8
+    |
+178 | pub fn device_added(
+    |        ^^^^^^^^^^^^
+179 |     alice: &mut Alice<UdevData>,
+180 |     event_loop: &LoopHandle<'static, CalloopData<UdevData>>,
+    |     -------------------------------------------------------
+help: provide the argument
+    |
+ 82 |             device_added(&mut alice, /* &LoopHandle<'static, CalloopData<UdevData>> */, device_id, &path)?;
+    |                                      ++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0308]: mismatched types
+   --> src/state/backend/udev.rs:89:87
+    |
+ 89 | ...ded { device_id, path } => device_added(&mut data.state, handle, device_id, &path),
+    |                               ------------                  ^^^^^^ expected `&LoopHandle<'_, CalloopData<UdevData>>`, found `LoopHandle<'_, CalloopData<UdevData>>`
+    |                               |
+    |                               arguments to this function are incorrect
+    |
+    = note: expected reference `&LoopHandle<'static, _>`
+                  found struct `LoopHandle<'_, _>`
+note: function defined here
+   --> src/state/backend/udev.rs:178:8
+    |
+178 | pub fn device_added(
+    |        ^^^^^^^^^^^^
+179 |     alice: &mut Alice<UdevData>,
+180 |     event_loop: &LoopHandle<'static, CalloopData<UdevData>>,
+    |     -------------------------------------------------------
+help: consider borrowing here
+    |
+ 89 |                 UdevEvent::Added { device_id, path } => device_added(&mut data.state, &handle, device_id, &path),
+    |                                                                                       +
+
+error[E0308]: arguments to this function are incorrect
+   --> src/state/backend/udev.rs:90:56
+    |
+ 90 | ...   UdevEvent::Changed { device_id } => Ok(device_changed(&mut data.state, handle, DrmNode::from_dev_id(...
+    |                                              ^^^^^^^^^^^^^^
+    |
+note: expected `&LoopHandle<'_, CalloopData<UdevData>>`, found `LoopHandle<'_, CalloopData<UdevData>>`
+   --> src/state/backend/udev.rs:90:88
+    |
+ 90 | ...   UdevEvent::Changed { device_id } => Ok(device_changed(&mut data.state, handle, DrmNode::from_dev_id(...
+    |                                                                              ^^^^^^
+    = note: expected reference `&LoopHandle<'static, _>`
+                  found struct `LoopHandle<'_, _>`
+note: expected `DrmNode`, found `Result<DrmNode, CreateDrmNodeError>`
+   --> src/state/backend/udev.rs:90:96
+    |
+ 90 | ...ce_changed(&mut data.state, handle, DrmNode::from_dev_id(device_id))),
+    |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    = note: expected struct `smithay::backend::drm::DrmNode`
+                 found enum `Result<smithay::backend::drm::DrmNode, CreateDrmNodeError>`
+note: function defined here
+   --> src/state/backend/udev.rs:246:8
+    |
+246 | pub fn device_changed(
+    |        ^^^^^^^^^^^^^^
+247 |     alice: &mut Alice<UdevData>,
+248 |     event_loop: &LoopHandle<'static, CalloopData<UdevData>>,
+    |     -------------------------------------------------------
+249 |     node: DrmNode,
+    |     -------------
+help: consider borrowing here
+    |
+ 90 |                 UdevEvent::Changed { device_id } => Ok(device_changed(&mut data.state, &handle, DrmNode::from_dev_id(device_id))),
+    |                                                                                        +
+help: consider using `Result::expect` to unwrap the `Result<smithay::backend::drm::DrmNode, CreateDrmNodeError>` value, panicking if the value is a `Result::Err`
+    |
+ 90 |                 UdevEvent::Changed { device_id } => Ok(device_changed(&mut data.state, handle, DrmNode::from_dev_id(device_id).expect("REASON"))),
+    |                                                                                                                               +++++++++++++++++
+
+error[E0308]: mismatched types
+   --> src/state/backend/udev.rs:91:88
+    |
+ 91 | ...ice_id } => Ok(device_removed(&mut data.state, DrmNode::from_dev_id(device_id))),
+    |                   --------------                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `DrmNode`, found `Result<DrmNode, CreateDrmNodeError>`
+    |                   |
+    |                   arguments to this function are incorrect
+    |
+    = note: expected struct `smithay::backend::drm::DrmNode`
+                 found enum `Result<smithay::backend::drm::DrmNode, CreateDrmNodeError>`
+note: function defined here
+   --> src/state/backend/udev.rs:389:8
+    |
+389 | pub fn device_removed(alice: &mut Alice<UdevData>, node: DrmNode) {
+    |        ^^^^^^^^^^^^^^                              -------------
+help: consider using `Result::expect` to unwrap the `Result<smithay::backend::drm::DrmNode, CreateDrmNodeError>` value, panicking if the value is a `Result::Err`
+    |
+ 91 |                 UdevEvent::Removed { device_id } => Ok(device_removed(&mut data.state, DrmNode::from_dev_id(device_id).expect("REASON"))),
+    |                                                                                                                       +++++++++++++++++
+
+error[E0308]: mismatched types
+  --> src/state/backend/udev.rs:88:13
+   |
+88 | / ...   match event {
+89 | | ...       UdevEvent::Added { device_id, path } => device_added(&mut data.state, handle, device_id, &path),
+90 | | ...       UdevEvent::Changed { device_id } => Ok(device_changed(&mut data.state, handle, DrmNode::from_de...
+91 | | ...       UdevEvent::Removed { device_id } => Ok(device_removed(&mut data.state, DrmNode::from_dev_id(dev...
+92 | | ...   }
+   | |_______^ expected `()`, found `Result<(), Box<dyn Error>>`
+   |
+   = note: expected unit type `()`
+                   found enum `Result<(), Box<dyn std::error::Error>>`
+help: consider using a semicolon here
+   |
+92 |             };
+   |              +
+help: consider using `Result::expect` to unwrap the `Result<(), Box<dyn std::error::Error>>` value, panicking if the value is a `Result::Err`
+   |
+92 |             }.expect("REASON")
+   |              +++++++++++++++++
+
+error[E0271]: type mismatch resolving `<Box<dyn Iterator<Item = Format>> as IntoIterator>::Item == Format`
+   --> src/state/backend/udev.rs:219:9
+    |
+213 |     let drm_output_manager = DrmOutputManager::new(
+    |                              --------------------- required by a bound introduced by this call
+...
+219 |         renderer_formats,
+    |         ^^^^^^^^^^^^^^^^ expected `smithay::backend::allocator::Format`, found `Format`
+    |
+note: required by a bound in `DrmOutputManager::<A, F, U, G>::new`
+   --> /home/ki11errabbit/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/backend/drm/output.rs:187:45
+    |
+181 |     pub fn new(
+    |            --- required by a bound in this associated function
+...
+187 |         renderer_formats: impl IntoIterator<Item = DrmFormat>,
+    |                                             ^^^^^^^^^^^^^^^^ required by this bound in `DrmOutputManager::<A, F, U, G>::new`
+
+warning: unused variable: `surface`
+  --> src/handlers/xdg_shell.rs:79:38
+   |
+79 |     fn reposition_request(&mut self, surface: PopupSurface, positioner: PositionerState, token: u32) {
+   |                                      ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_surface`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `positioner`
+  --> src/handlers/xdg_shell.rs:79:61
+   |
+79 |     fn reposition_request(&mut self, surface: PopupSurface, positioner: PositionerState, token: u32) {
+   |                                                             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_positioner`
+
+warning: unused variable: `token`
+  --> src/handlers/xdg_shell.rs:79:90
+   |
+79 |     fn reposition_request(&mut self, surface: PopupSurface, positioner: PositionerState, token: u32) {
+   |                                                                                          ^^^^^ help: if this is intentional, prefix it with an underscore: `_token`
+
+warning: unused variable: `surface`
+  --> src/handlers/xdg_shell.rs:90:32
+   |
+90 |     fn move_request(&mut self, surface: ToplevelSurface, seat: wl_seat::WlSeat, serial: Serial) {
+   |                                ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_surface`
+
+warning: unused variable: `seat`
+  --> src/handlers/xdg_shell.rs:90:58
+   |
+90 |     fn move_request(&mut self, surface: ToplevelSurface, seat: wl_seat::WlSeat, serial: Serial) {
+   |                                                          ^^^^ help: if this is intentional, prefix it with an underscore: `_seat`
+
+warning: unused variable: `serial`
+  --> src/handlers/xdg_shell.rs:90:81
+   |
+90 |     fn move_request(&mut self, surface: ToplevelSurface, seat: wl_seat::WlSeat, serial: Serial) {
+   |                                                                                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_serial`
+
+warning: unused variable: `surface`
+   --> src/handlers/xdg_shell.rs:119:9
+    |
+119 |         surface: ToplevelSurface,
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_surface`
+
+warning: unused variable: `seat`
+   --> src/handlers/xdg_shell.rs:120:9
+    |
+120 |         seat: wl_seat::WlSeat,
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_seat`
+
+warning: unused variable: `serial`
+   --> src/handlers/xdg_shell.rs:121:9
+    |
+121 |         serial: Serial,
+    |         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_serial`
+
+warning: unused variable: `edges`
+   --> src/handlers/xdg_shell.rs:122:9
+    |
+122 |         edges: xdg_toplevel::ResizeEdge,
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_edges`
+
+warning: unused variable: `layer`
+  --> src/handlers/wlr_shell.rs:53:9
+   |
+53 |         layer: smithay::wayland::shell::wlr_layer::Layer,
+   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_layer`
+
+warning: unused variable: `event`
+  --> src/input.rs:39:41
+   |
+39 |             InputEvent::PointerMotion { event, .. } => {}
+   |                                         ^^^^^ help: try ignoring the field: `event: _`
+
+warning: variable does not need to be mutable
+  --> src/state/backend/winit.rs:50:14
+   |
+50 |         let (mut backend, winit) = winit::init()?;
+   |              ----^^^^^^^
+   |              |
+   |              help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+  --> src/state/backend/winit.rs:51:13
+   |
+51 |         let mut damage_tracker = OutputDamageTracker::from_output(&output);
+   |             ----^^^^^^^^^^^^^^
+   |             |
+   |             help: remove this `mut`
+
+warning: unused variable: `output`
+   --> src/state/backend/udev.rs:158:33
+    |
+158 |     fn reset_buffers(&mut self, output: &smithay::output::Output) {
+    |                                 ^^^^^^ help: if this is intentional, prefix it with an underscore: `_output`
+
+warning: unused variable: `surface`
+   --> src/state/backend/udev.rs:162:32
+    |
+162 | ...(&mut self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {
+    |                ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_surface`
+
+warning: unused variable: `led_state`
+   --> src/state/backend/udev.rs:166:36
+    |
+166 |     fn update_led_state(&mut self, led_state: smithay::input::keyboard::LedState) {
+    |                                    ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_led_state`
+
+warning: variable does not need to be mutable
+   --> src/state.rs:261:13
+    |
+261 |         let mut windows = self.window_registry.filter(&scope)
+    |             ----^^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `current_tag`
+   --> src/state.rs:526:13
+    |
+526 |         let current_tag = info.tag;
+    |             ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_current_tag`
+
+warning: variable does not need to be mutable
+   --> src/state.rs:556:13
+    |
+556 |         let mut tag = self.outputs.current_focused_tag()?;
+    |             ----^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/state.rs:574:13
+    |
+574 |         let mut tag = self.outputs.current_focused_tag()?;
+    |             ----^^^
+    |             |
+    |             help: remove this `mut`
+
+Some errors have detailed explanations: E0061, E0107, E0252, E0271, E0308.
+For more information about an error, try `rustc --explain E0061`.
+warning: `alice-wm` (bin "alice-wm") generated 48 warnings
+error: could not compile `alice-wm` (bin "alice-wm") due to 21 previous errors; 48 warnings emitted

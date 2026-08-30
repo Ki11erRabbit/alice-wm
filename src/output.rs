@@ -77,7 +77,13 @@ impl Outputs {
                 }
             })
     }
-
+    pub fn deactivate(&mut self, name: &str) {
+        if let Some(id) = self.map.get(name) {
+            if let Some(info) = self.outputs.get_mut(id.0 as usize) {
+                info.active = false;
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
