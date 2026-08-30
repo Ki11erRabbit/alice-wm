@@ -214,21 +214,30 @@ pub fn device_added(
     let fd = DrmDeviceFd::new(DeviceFd::from(fd));
 
     let (drm_device, drm_notifier) = DrmDevice::new(fd.clone(), true)?;
-    let gbm = GbmDevice::new(fd)?;
-    let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING);
 
-    let render_node = node
-        .node_with_type(NodeType::Render)
-        .and_then(|r| r.ok())
-        .unwrap_or(alice.backend_data.primary_gpu);
+
+    let (alloc_fd, render_node) = if let Some(own_render_node) =
+            node.node_with_type(NodeType::Render).and_then(|r| r.ok()) {
+        (fd.clone(), own_render_node)
+    } else {
+        let primary = alice.backend_data.primary_gpu;
+        let primary_path = primary
+            .dev_path()
+            .ok_or("no device path for primary GPU render node")?;
+        let alloc_raw_fd = alice.backend_data.session.open(
+            &primary_path,
+            OFlags::RDWR | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        )?;
+        (DrmDeviceFd::new(DeviceFd::from(alloc_raw_fd)), primary)
+    };
+
+    let gbm = GbmDevice::new(alloc_fd)?;
+    let allocator = GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING);
 
     if let Err(err) = alice.backend_data.gpus.as_mut().add_node(render_node, gbm.clone()) {
         eprintln!("Failed to add render node {:?}: {}", render_node, err);
     }
 
-    // NOTE: this is the one spot I'd double check against docs.rs for your exact
-    // smithay 0.7.0 build — `.shm_formats()` is wrong (that's for wl_shm imports,
-    // not scanout), swapped for the renderer's dmabuf/scanout-capable formats.
     let renderer_formats = alice
         .backend_data
         .gpus
