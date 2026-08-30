@@ -644,13 +644,16 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 if let Some(toplevel) = info.window.toplevel() {
                     toplevel.send_close();
                 }
-                let Some(info) = self.window_registry.filter(&LayoutScope {
+                let ids = self.window_registry.filter(&LayoutScope {
                     output: info.output,
                     tag: info.tag,
-                }).next() else {
-                    return;
-                };
-                self.window_registry.change_focus(info);
+                }).collect::<Vec<_>>();
+                for id in ids {
+                    if id != self.window_registry.focused_window() {
+                        self.window_registry.change_focus(id);
+                        break;
+                    }
+                }
             }
             Action::FullScreen => {
                 let id = self.window_registry.focused_window();
