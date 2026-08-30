@@ -698,8 +698,11 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
 }
-
 impl ClientData for ClientState {
-    fn initialized(&self, _client_id: ClientId) {}
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+    fn initialized(&self, client_id: ClientId) {
+        eprintln!("client {:?} initialized", client_id);
+    }
+    fn disconnected(&self, client_id: ClientId, reason: DisconnectReason) {
+        eprintln!("client {:?} disconnected: {:?}", client_id, reason);
+    }
 }
