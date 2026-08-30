@@ -267,6 +267,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         let layout = self.layout_registry.get_layout(&scope);
         let rects = layout.arrange(area, &windows);
+        eprintln!("relayout_single: area={:?} windows={} rects={:?}", area, windows.len(), rects);
 
         for (id, rect) in windows.iter().zip(rects) {
             self.apply_rects(*id, rect);
@@ -287,6 +288,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         });
         window.window.toplevel().unwrap().send_configure();
         self.space.map_element(window.window.clone(), (rect.x, rect.y), false);
+        eprintln!("apply_rects: window {:?} -> {:?}", id, rect);
     }
 
 
