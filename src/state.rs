@@ -367,10 +367,20 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             output: output.id,
             tag,
         };
-        let mut windows = self.window_registry.filter(&scope)
-            .collect::<Vec<_>>();
+
+        // Floating windows (currently: transient dialogs such as a
+        // "Save As" file picker — see `WindowInfo::floating`) sit outside
+        // the tiling grid entirely, so they're excluded before handing the
+        // rest to the layout algorithm: a dialog shouldn't shrink/reshuffle
+        // real application windows, and it shouldn't be shrunk/reshuffled
+        // by them either.
+        let (floating, windows): (Vec<WindowId>, Vec<WindowId>) = self.window_registry.filter(&scope)
+            .partition(|id| self.window_registry.get(id).map(|w| w.floating).unwrap_or(false));
 
         if self.try_full_screen(area, &windows) {
+            for id in &floating {
+                self.apply_floating(*id, area);
+            }
             BackendData::schedule_render(self);
             return;
         }
@@ -381,6 +391,9 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         for (id, rect) in windows.iter().zip(rects) {
             self.apply_rects(*id, rect);
+        }
+        for id in &floating {
+            self.apply_floating(*id, area);
         }
 
         BackendData::schedule_render(self);
@@ -401,6 +414,39 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         window.window.toplevel().unwrap().send_configure();
         self.space.map_element(window.window.clone(), (rect.x, rect.y), false);
         eprintln!("apply_rects: window {:?} -> {:?}", id, rect);
+    }
+
+    /// Places a floating window (see `WindowInfo::floating`) centered
+    /// within `area`, at its own size rather than a forced tile rect.
+    ///
+    /// The configure sent has no size — 0 on both axes is the standard
+    /// "you choose" hint for a toplevel — so the client (a dialog, in the
+    /// common case) keeps using whatever size it actually wants instead of
+    /// being stretched or squeezed to fit a tile. Before the client has
+    /// committed any real content, `geometry()` reports a default/empty
+    /// size; a reasonable fixed fallback is used for that first placement
+    /// so it isn't pinned into a corner at 0x0 in the meantime.
+    fn apply_floating(&mut self, id: WindowId, area: Rect) {
+        let Some(window) = self.window_registry.get(&id) else {
+            return;
+        };
+
+        let geo = window.window.geometry();
+        let (w, h) = if geo.size.w > 0 && geo.size.h > 0 {
+            (geo.size.w, geo.size.h)
+        } else {
+            (640, 480)
+        };
+
+        window.window.toplevel().unwrap().with_pending_state(|state| {
+            state.size = None;
+            state.states.unset(xdg_toplevel::State::Fullscreen);
+        });
+        window.window.toplevel().unwrap().send_configure();
+
+        let x = area.x + (area.width - w).max(0) / 2;
+        let y = area.y + (area.height - h).max(0) / 2;
+        self.space.map_element(window.window.clone(), (x, y), false);
     }
 
 

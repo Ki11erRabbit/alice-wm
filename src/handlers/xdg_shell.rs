@@ -53,9 +53,22 @@ impl<BackendData: Backend + 'static> XdgShellHandler for Alice<BackendData> {
             None => TagId(0),
         };
         eprintln!("new_toplevel: assigning to output={:?} tag={:?}", output.0, focused_tag.0);
+
+        // A toplevel that declares a parent via xdg_toplevel.set_parent is a
+        // transient/dialog window — e.g. the "Save As" file picker a
+        // browser spawns for a download — rather than an independent
+        // application window. Tiling these in with everything else forces
+        // them (and shrinks their parent to make room) into an arbitrary
+        // tile-sized rect they were never designed for, which is exactly
+        // the kind of thing that looks like "the picker never opened": it
+        // did map, just squeezed into half the screen instead of appearing
+        // as the small window it actually is. Keep them out of the tiling
+        // grid entirely (see `relayout_single`/`apply_floating`).
+        let floating = surface.parent().is_some();
+
         let window = Window::new_wayland_window(surface);
 
-        let id = self.window_registry.insert(WindowInfo::new(focused_tag, info.id, window.clone()));
+        let id = self.window_registry.insert(WindowInfo::new(focused_tag, info.id, window.clone(), floating));
 
         self.space.map_element(window.clone(), (0, 0), true);
         self.undo_all_fullscreen();

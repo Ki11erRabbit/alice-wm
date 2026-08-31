@@ -24,6 +24,11 @@ pub struct WindowInfo {
     pub output: OutputId,
     pub window: Window,
     pub fullscreen: bool,
+    /// True for transient windows (those with an xdg_toplevel `parent` set) —
+    /// dialogs like a GTK/Qt "Save As" file picker spawned from a browser.
+    /// These are deliberately kept out of the tiling grid: see
+    /// `Alice::relayout_single`/`apply_floating`.
+    pub floating: bool,
 }
 
 impl WindowInfo {
@@ -31,12 +36,14 @@ impl WindowInfo {
         tag: TagId,
         output: OutputId,
         window: Window,
+        floating: bool,
     ) -> Self {
         Self {
             tag,
             output,
             window,
             fullscreen: false,
+            floating,
         }
     }
 }
