@@ -178,7 +178,13 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         socket_name
     }
 
-    pub fn layer_under(&self, pos: Point<f64, Logical>) -> Option<smithay::desktop::LayerSurface> {
+    /// Finds the topmost layer-shell surface under `pos`, restricted to the
+    /// given layers (checked in the order given). Callers that care about
+    /// z-order relative to regular windows should pass just
+    /// `[Overlay, Top]` (above windows) or `[Bottom, Background]` (below
+    /// windows) rather than all four — see `surface_under` below, which
+    /// does exactly that for hover/motion targeting.
+    pub fn layer_under(&self, pos: Point<f64, Logical>, layers: &[wlr_layer::Layer]) -> Option<smithay::desktop::LayerSurface> {
         let output = self
             .space
             .outputs()
@@ -189,15 +195,31 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     .unwrap_or(false)
             })?;
         let output_loc = self.space.output_geometry(output)?.loc.to_f64();
-        let layers = layer_map_for_output(output);
+        let map = layer_map_for_output(output);
         let point = pos - output_loc;
 
-        layers
-            .layer_under(wlr_layer::Layer::Overlay, point)
-            .or_else(|| layers.layer_under(wlr_layer::Layer::Top, point))
-            .or_else(|| layers.layer_under(wlr_layer::Layer::Bottom, point))
-            .or_else(|| layers.layer_under(wlr_layer::Layer::Background, point))
-            .cloned()
+        layers.iter().find_map(|layer| map.layer_under(*layer, point)).cloned()
+    }
+
+    /// Grants keyboard focus to a layer-shell surface that was just clicked,
+    /// but only if it asked for on-demand focus: surfaces with no keyboard
+    /// interest (e.g. a bar) just get the button event routed to them
+    /// without disturbing focus, and Exclusive surfaces already grabbed
+    /// focus on commit.
+    pub fn focus_layer_on_demand(&mut self, layer: &smithay::desktop::LayerSurface, serial: smithay::utils::Serial) {
+        let interactivity = smithay::wayland::compositor::with_states(layer.wl_surface(), |states| {
+            states
+                .cached_state
+                .get::<wlr_layer::LayerSurfaceCachedState>()
+                .current()
+                .keyboard_interactivity
+        });
+
+        if interactivity == wlr_layer::KeyboardInteractivity::OnDemand {
+            if let Some(keyboard) = self.seat.get_keyboard() {
+                keyboard.set_focus(self, Some(layer.wl_surface().clone()), serial);
+            }
+        }
     }
 
     pub fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
@@ -284,6 +306,40 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         };
 
         (clamped_x, clamped_y).into()
+    }
+
+    /// Keep `outputs.focused_output` in sync with whichever output the
+    /// pointer physically sits over — the "current" output that keybindings,
+    /// new-window placement, and layer-shell fallback lookups use.
+    ///
+    /// This is distinct from `focus_output`, which is for keybinding-driven
+    /// output switching and deliberately warps the pointer to the target
+    /// output's center. Called on every pointer motion, this must do
+    /// neither of those things — it only updates which output is
+    /// considered "focused" as the cursor crosses between them, mirroring
+    /// the window-level focus-follows-mouse behavior already applied via
+    /// `focus_window`. Without this, moving the mouse onto another monitor
+    /// visually moves the cursor there but leaves keybindings, new windows,
+    /// and layer-shell surfaces with no explicit output still targeting
+    /// whichever output was last focused via a keybinding.
+    pub fn follow_pointer_output_focus(&mut self, pos: Point<f64, Logical>) {
+        let Some(output_id) = self
+            .outputs
+            .iter()
+            .find(|info| {
+                self.space
+                    .output_geometry(&info.output)
+                    .map(|geo| geo.to_f64().contains(pos))
+                    .unwrap_or(false)
+            })
+            .map(|info| info.id)
+        else {
+            return;
+        };
+
+        if self.outputs.get_focused().id != output_id {
+            self.outputs.change_focus(output_id);
+        }
     }
 
     /// Pass in an scope to target only that output

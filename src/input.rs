@@ -40,6 +40,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 let pointer = self.seat.get_pointer().unwrap();
 
                 let pos = self.clamp_to_outputs(pointer.current_location() + event.delta());
+                self.follow_pointer_output_focus(pos);
 
                 let under = self.surface_under(pos);
                 let surface_under = self.space.element_under(pos);
@@ -65,6 +66,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 let output_geo = self.space.output_geometry(output).unwrap();
 
                 let pos = event.position_transformed(output_geo.size) + output_geo.loc.to_f64();
+                self.follow_pointer_output_focus(pos);
 
                 let serial = SERIAL_COUNTER.next_serial();
 
@@ -100,9 +102,23 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 let button_state = event.state();
 
                 if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
-                    if let Some((window, _loc)) = self
+                    let pos = pointer.current_location();
+
+                    // Mirror `surface_under`'s z-order: Overlay/Top layer
+                    // surfaces (bars, launchers, notifications) sit above
+                    // windows, so they must be hit-tested first — otherwise
+                    // a window that happens to occupy the same screen area
+                    // (very possible for a non-reserving/floating bar, which
+                    // doesn't shrink the tiling area) silently steals clicks
+                    // meant for the bar sitting visibly on top of it.
+                    if let Some(layer) = self.layer_under(pos, &[
+                        smithay::wayland::shell::wlr_layer::Layer::Overlay,
+                        smithay::wayland::shell::wlr_layer::Layer::Top,
+                    ]) {
+                        self.focus_layer_on_demand(&layer, serial);
+                    } else if let Some((window, _loc)) = self
                         .space
-                        .element_under(pointer.current_location())
+                        .element_under(pos)
                         .map(|(w, l)| (w.clone(), l))
                     {
                         self.space.raise_element(&window, true);
@@ -114,26 +130,13 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                         self.space.elements().for_each(|window| {
                             window.toplevel().unwrap().send_pending_configure();
                         });
-                    } else if let Some(layer) = self.layer_under(pointer.current_location()) {
-                        // A click landed on a layer-shell surface (panel, launcher, etc).
-                        // Only OnDemand surfaces should be granted keyboard focus on click;
-                        // surfaces with no keyboard interest (e.g. waybar) should just get
-                        // the button event routed to them without disturbing focus, and
-                        // Exclusive surfaces already grabbed focus on commit.
-                        let interactivity = smithay::wayland::compositor::with_states(
-                            layer.wl_surface(),
-                            |states| {
-                                states
-                                    .cached_state
-                                    .get::<smithay::wayland::shell::wlr_layer::LayerSurfaceCachedState>()
-                                    .current()
-                                    .keyboard_interactivity
-                            },
-                        );
-
-                        if interactivity == smithay::wayland::shell::wlr_layer::KeyboardInteractivity::OnDemand {
-                            keyboard.set_focus(self, Some(layer.wl_surface().clone()), serial);
-                        }
+                    } else if let Some(layer) = self.layer_under(pos, &[
+                        smithay::wayland::shell::wlr_layer::Layer::Bottom,
+                        smithay::wayland::shell::wlr_layer::Layer::Background,
+                    ]) {
+                        // A click landed on a layer-shell surface below windows
+                        // (wallpaper, desktop widgets).
+                        self.focus_layer_on_demand(&layer, serial);
                     } else {
                         self.space.elements().for_each(|window| {
                             window.set_activated(false);
