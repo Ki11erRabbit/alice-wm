@@ -914,6 +914,18 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             Action::FocusOutputDown => {
                 self.focus_output_direction(crate::output::Direction::Down);
             }
+            Action::MoveOutputLeft => {
+                self.move_to_output(crate::output::Direction::Left);
+            }
+            Action::MoveOutputRight => {
+                self.move_to_output(crate::output::Direction::Right);
+            }
+            Action::MoveOutputUp => {
+                self.move_to_output(crate::output::Direction::Up);
+            }
+            Action::MoveOutputDown => {
+                self.move_to_output(crate::output::Direction::Down);
+            }
         }
     }
 

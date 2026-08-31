@@ -30,6 +30,10 @@ pub enum Action {
     FocusOutputRight,
     FocusOutputUp,
     FocusOutputDown,
+    MoveOutputLeft,
+    MoveOutputRight,
+    MoveOutputUp,
+    MoveOutputDown,
 }
 
 impl UserData for Action {
@@ -368,6 +372,23 @@ impl Default for Config {
             keysym: Keysym::Down,
         }, Action::FocusOutputDown);
 
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::Left,
+        }, Action::MoveOutputLeft);
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::Right,
+        }, Action::MoveOutputRight);
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::Up,
+        }, Action::MoveOutputUp);
+        map.insert(KeyPress {
+            modifiers: main_mod | ModMask::Shift,
+            keysym: Keysym::Down,
+        }, Action::MoveOutputDown);
+
 
         Self {
             map,
@@ -477,6 +498,18 @@ fn create_lua(use_alt: bool) -> mlua::Result<Lua> {
     })?)?;
     action_table.set("focus_output_down", lua.create_function(|_, _: ()| {
         Ok(Action::FocusOutputDown)
+    })?)?;
+    action_table.set("move_output_left", lua.create_function(|_, _: ()| {
+        Ok(Action::MoveOutputLeft)
+    })?)?;
+    action_table.set("move_output_right", lua.create_function(|_, _: ()| {
+        Ok(Action::MoveOutputRight)
+    })?)?;
+    action_table.set("move_output_up", lua.create_function(|_, _: ()| {
+        Ok(Action::MoveOutputUp)
+    })?)?;
+    action_table.set("move_output_down", lua.create_function(|_, _: ()| {
+        Ok(Action::MoveOutputDown)
     })?)?;
 
     lua.globals().set("Action", action_table)?;
