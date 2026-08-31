@@ -170,20 +170,25 @@ where
         match &self.status {
             CursorImageStatus::Hidden => vec![],
             CursorImageStatus::Named(_) => {
-                vec![
-                    E::from(PointerRenderElement::<R>::from(
-                        MemoryRenderBufferRenderElement::from_buffer(
-                            renderer,
-                            location.to_f64(),
-                            &self.buffer,
-                            None,
-                            None,
-                            None,
-                            Kind::Cursor,
-                        )
-                        .expect("failed to import cursor buffer"),
-                    )),
-                ]
+                match MemoryRenderBufferRenderElement::from_buffer(
+                    renderer,
+                    location.to_f64(),
+                    &self.buffer,
+                    None,
+                    None,
+                    None,
+                    Kind::Cursor,
+                ) {
+                    Ok(element) => vec![E::from(PointerRenderElement::<R>::from(element))],
+                    Err(err) => {
+                        // Importing the cursor texture can fail transiently
+                        // (e.g. GPU/driver under memory pressure). Losing the
+                        // cursor for a frame is far better than taking the
+                        // whole compositor down.
+                        eprintln!("failed to import cursor buffer: {:?}", err);
+                        vec![]
+                    }
+                }
             }
             CursorImageStatus::Surface(surface) => {
                 let elements: Vec<PointerRenderElement<R>> =

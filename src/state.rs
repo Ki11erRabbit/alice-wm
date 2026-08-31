@@ -170,7 +170,15 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     //,eprintln!("dispatch_clients firing");
                     // Safety: we don't drop the display
                     unsafe {
-                        display.get_mut().dispatch_clients(&mut state.state).unwrap();
+                        if let Err(err) = display.get_mut().dispatch_clients(&mut state.state) {
+                            // A single client's protocol violation or a
+                            // socket error (e.g. it just segfaulted mid-write)
+                            // must not bring down every other client's
+                            // session. wayland-server already disconnects
+                            // the offending client in this case; just log it
+                            // and keep the loop running for everyone else.
+                            eprintln!("dispatch_clients error (client disconnected): {}", err);
+                        }
                     }
                     let _ = state.display_handle.flush_clients();
                     Ok(PostAction::Continue)
