@@ -361,6 +361,12 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
     /// focused output, based on each output's position in global (layout)
     /// space (i.e. wherever `Space::map_output` placed it).
     pub fn focus_output_direction(&mut self, direction: crate::output::Direction) -> Option<()> {
+        let id = self.select_output_direction(direction)?;
+        self.focus_output(id);
+        Some(())
+    }
+
+    pub fn select_output_direction(&self, direction: crate::output::Direction) -> Option<OutputId> {
         use crate::output::Direction;
 
         let focused = self.outputs.get_focused();
@@ -428,8 +434,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         }
 
         let (id, ..) = best?;
-        self.focus_output(id);
-        Some(())
+        Some(id)
     }
 
     /// Switch input focus to a specific output: updates which output is
