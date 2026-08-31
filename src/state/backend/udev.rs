@@ -163,7 +163,7 @@ impl Backend for UdevData {
 
         for (device_id, path) in udev_backend.device_list() {
             if let Err(err) = device_added(&mut alice, &handle, device_id, &path, &mut pending_kms) {
-                eprintln!("Failed to add device {:?}: {}", device_id, err);
+                //eprintln!("Failed to add device {:?}: {}", device_id, err);
             }
         }
 
@@ -171,7 +171,7 @@ impl Backend for UdevData {
             let node = pending.node;
             match finish_kms_device(&mut alice, pending.node, pending.fd, pending.drm_device) {
                 Ok(()) => device_changed(&mut alice, &handle, node),
-                Err(err) => eprintln!("Failed to finish display device {:?}: {}", node, err),
+                Err(err) => //eprintln!("Failed to finish display device {:?}: {}", node, err),
             }
         }
         let dmabuf_formats = alice
@@ -196,13 +196,13 @@ impl Backend for UdevData {
             match event {
                 UdevEvent::Added { device_id, path } => {
                     if let Err(err) = device_added(&mut data.state, &udev_handle, device_id, &path, &mut pending_kms) {
-                        eprintln!("Failed to add device {:?}: {}", device_id, err);
+                        //eprintln!("Failed to add device {:?}: {}", device_id, err);
                     }
                     for pending in pending_kms {
                         let node = pending.node;
                         match finish_kms_device(&mut data.state, pending.node, pending.fd, pending.drm_device) {
                             Ok(()) => device_changed(&mut data.state, &udev_handle, node),
-                            Err(err) => eprintln!("Failed to finish display device {:?}: {}", node, err),
+                            Err(err) => //eprintln!("Failed to finish display device {:?}: {}", node, err),
                         }
                     }
                 }
@@ -256,7 +256,7 @@ impl Backend for UdevData {
                 }
                 SessionEvent::ActivateSession => {
                     if let Err(err) = libinput_context.resume() {
-                        eprintln!("Failed to resume libinput context: {:?}", err);
+                        //eprintln!("Failed to resume libinput context: {:?}", err);
                     }
                     for (_node, backend) in state.state.backend_data.backends.iter_mut() {
                         backend
@@ -310,7 +310,7 @@ impl Backend for UdevData {
         let config = match crate::config::execute_lua_config(false) {
             Ok(config) => config,
             Err(err) => {
-                eprintln!("Error while loading config: {err}");
+                //eprintln!("Error while loading config: {err}");
                 Config::default()
             }
         };
@@ -341,7 +341,7 @@ pub fn device_added(
         Ok((drm_device, drm_notifier)) => {
             event_loop.insert_source(drm_notifier, move |event, meta, data| match event {
                 DrmEvent::VBlank(crtc) => frame_finish(&mut data.state, node, crtc, meta),
-                DrmEvent::Error(err) => eprintln!("DRM error on device {:?}: {}", node, err),
+                DrmEvent::Error(err) => //eprintln!("DRM error on device {:?}: {}", node, err),
             })?;
 
             let render_node_ready = node.node_with_type(NodeType::Render).and_then(|r| r.ok()).is_some()
@@ -367,10 +367,10 @@ pub fn device_added(
                 .unwrap_or(node);
 
             if let Err(err) = alice.backend_data.gpus.as_mut().add_node(render_node, gbm.clone()) {
-                eprintln!("Failed to add render-only node {:?}: {}", render_node, err);
+                //eprintln!("Failed to add render-only node {:?}: {}", render_node, err);
             }
             alice.backend_data.render_gbm_devices.insert(render_node, gbm);
-            eprintln!("Registered {:?} as a render-only GPU (no display outputs)", render_node);
+            //eprintln!("Registered {:?} as a render-only GPU (no display outputs)", render_node);
             Ok(())
         }
     }
@@ -413,7 +413,7 @@ fn finish_kms_device(
     // in device_added's fallback branch.
     if own_render_node.is_some() {
         if let Err(err) = alice.backend_data.gpus.as_mut().add_node(render_node, gbm.clone()) {
-            eprintln!("Failed to add render node {:?}: {}", render_node, err);
+            //eprintln!("Failed to add render node {:?}: {}", render_node, err);
         }
     }
 
@@ -516,7 +516,7 @@ fn connector_connected(
     };
 
     let Some(drm_mode) = mode else {
-        eprintln!("No mode available for connector {:?}", connector.interface());
+        //eprintln!("No mode available for connector {:?}", connector.interface());
         return;
     };
 
@@ -605,7 +605,7 @@ fn connector_connected(
             });
         }
         Err(err) => {
-            eprintln!("Failed to initialize output on crtc {:?}: {}", crtc, err);
+            //eprintln!("Failed to initialize output on crtc {:?}: {}", crtc, err);
         }
     }
 }
@@ -657,7 +657,7 @@ pub fn frame_finish(
     };
 
     if let Err(err) = surface.drm_output.frame_submitted() {
-        eprintln!("frame_submitted failed for crtc {:?}: {}", crtc, err);
+        //eprintln!("frame_submitted failed for crtc {:?}: {}", crtc, err);
         return;
     }
 
@@ -676,7 +676,7 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     let mut renderer = match alice.backend_data.gpus.single_renderer(&render_node) {
         Ok(r) => r,
         Err(err) => {
-            eprintln!("Failed to acquire renderer for {:?}: {}", render_node, err);
+            //eprintln!("Failed to acquire renderer for {:?}: {}", render_node, err);
             return;
         }
     };
@@ -705,7 +705,7 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         match space_render_elements(&mut renderer, [&alice.space], &output, 1.0) {
             Ok(elements) => elements,
             Err(err) => {
-                eprintln!("Failed to gather render elements for {:?}: {:?}", output.name(), err);
+                //eprintln!("Failed to gather render elements for {:?}: {:?}", output.name(), err);
                 return;
             }
         };
@@ -737,7 +737,7 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     {
         Ok(res) if !res.is_empty => {
             if let Err(err) = surface.drm_output.queue_frame(()) {
-                eprintln!("Failed to queue frame on crtc {:?}: {}", crtc, err);
+                //eprintln!("Failed to queue frame on crtc {:?}: {}", crtc, err);
             } else {
                 // A page-flip is now in flight; schedule_render will leave
                 // this CRTC alone until frame_finish sees its vblank.
@@ -746,7 +746,7 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         }
         Ok(_) => {}
         Err(err) => {
-            eprintln!("render_frame failed on crtc {:?}: {:?}", crtc, err);
+            //eprintln!("render_frame failed on crtc {:?}: {:?}", crtc, err);
         }
     }
 

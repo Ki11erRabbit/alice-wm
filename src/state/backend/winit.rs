@@ -202,7 +202,7 @@ impl Backend for WinitData {
         let config = match crate::config::execute_lua_config(true) {
             Ok(config) => config,
             Err(err) => {
-                eprintln!("Error while loading config: {err}");
+                //eprintln!("Error while loading config: {err}");
                 Config::default()
             }
         };

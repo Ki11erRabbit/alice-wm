@@ -93,7 +93,7 @@ impl<BackendData: Backend + 'static> WlrLayerShellHandler for Alice<BackendData>
         namespace: String,
     )
     {
-        eprintln!("new_layer_surface: namespace={:?} layer={:?}", namespace, layer);
+        //eprintln!("new_layer_surface: namespace={:?} layer={:?}", namespace, layer);
         let output = output
             .and_then(|output| {
                 Output::from_resource(&output)
@@ -114,7 +114,7 @@ impl<BackendData: Backend + 'static> WlrLayerShellHandler for Alice<BackendData>
 
         let mut map = layer_map_for_output(&output);
         if let Err(e) = map.map_layer(&desktop_surface) {
-            eprintln!("failed to map layer surface: {e:?}");
+            //eprintln!("failed to map layer surface: {e:?}");
             return
         }
         drop(map);

@@ -148,13 +148,13 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         loop_handle
             .insert_source(listening_socket, move |client_stream, _, state| {
-                eprintln!("accepting new client connection");
+                //,eprintln!("accepting new client connection");
                 match state
                     .display_handle
                     .insert_client(client_stream, Arc::new(ClientState::default()))
                 {
-                    Ok(_) => eprintln!("client inserted successfully"),
-                    Err(err) => eprintln!("insert_client failed: {:?}", err),
+                    //,Ok(_) => eprintln!("client inserted successfully"),
+                    //,Err(err) => eprintln!("insert_client failed: {:?}", err),
                 }
             })
             .expect("Failed to init the wayland event source.");
@@ -164,7 +164,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             .insert_source(
                 Generic::new(display, Interest::READ, Mode::Level),
                 |_, display, state| {
-                    eprintln!("dispatch_clients firing");
+                    //,eprintln!("dispatch_clients firing");
                     // Safety: we don't drop the display
                     unsafe {
                         display.get_mut().dispatch_clients(&mut state.state).unwrap();
@@ -387,7 +387,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         let layout = self.layout_registry.get_layout(&scope);
         let rects = layout.arrange(area, &windows);
-        eprintln!("relayout_single: area={:?} windows={} rects={:?}", area, windows.len(), rects);
+        //,eprintln!("relayout_single: area={:?} windows={} rects={:?}", area, windows.len(), rects);
 
         for (id, rect) in windows.iter().zip(rects) {
             self.apply_rects(*id, rect);
@@ -413,7 +413,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         });
         window.window.toplevel().unwrap().send_configure();
         self.space.map_element(window.window.clone(), (rect.x, rect.y), false);
-        eprintln!("apply_rects: window {:?} -> {:?}", id, rect);
+        //,eprintln!("apply_rects: window {:?} -> {:?}", id, rect);
     }
 
     /// Places a floating window (see `WindowInfo::floating`) centered
@@ -1012,7 +1012,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 let Some(info) = self.window_registry.get_focused() else {
                     return;
                 };
-                eprintln!("Close: closing window on tag={}", info.tag.0);
+                //,eprintln!("Close: closing window on tag={}", info.tag.0);
                 if let Some(toplevel) = info.window.toplevel() {
                     toplevel.send_close();
                 }
@@ -1127,9 +1127,9 @@ pub struct ClientState {
 }
 impl ClientData for ClientState {
     fn initialized(&self, client_id: ClientId) {
-        eprintln!("client {:?} initialized", client_id);
+        //,eprintln!("client {:?} initialized", client_id);
     }
     fn disconnected(&self, client_id: ClientId, reason: DisconnectReason) {
-        eprintln!("client {:?} disconnected: {:?}", client_id, reason);
+        //,eprintln!("client {:?} disconnected: {:?}", client_id, reason);
     }
 }

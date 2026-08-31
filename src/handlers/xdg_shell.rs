@@ -52,7 +52,7 @@ impl<BackendData: Backend + 'static> XdgShellHandler for Alice<BackendData> {
             Some(tag) => tag,
             None => TagId(0),
         };
-        eprintln!("new_toplevel: assigning to output={:?} tag={:?}", output.0, focused_tag.0);
+        //eprintln!("new_toplevel: assigning to output={:?} tag={:?}", output.0, focused_tag.0);
 
         // A toplevel that declares a parent via xdg_toplevel.set_parent is a
         // transient/dialog window — e.g. the "Save As" file picker a
