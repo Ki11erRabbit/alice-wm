@@ -12,17 +12,31 @@
 
   outputs = { self, nixpkgs, flake-utils, rust-overlay }:
     let
-      # Runtime deps every Smithay/wayland compositor typically needs.
+      # Libraries alice-wm links against / dlopens at runtime.
       runtimeDeps = pkgs: with pkgs; [
         wayland
+        wayland-protocols
         libxkbcommon
         libinput
+        libglvnd
         mesa
-        libGL
-        seatd
         udev
-        systemdLibs
-        vulkan-loader
+        systemd
+        seatd
+        libdrm
+        libgbm
+        pixman
+        libdisplay-info
+
+        # X11 libs, for Xwayland support
+        xorg.libX11
+        xorg.libxcb
+      ];
+
+      # Build-time-only tooling (pkg-config, bindgen's libclang, etc.)
+      nativeDeps = pkgs: with pkgs; [
+        pkg-config
+        makeWrapper
       ];
     in
     flake-utils.lib.eachDefaultSystem (system:
@@ -41,15 +55,19 @@
 
           cargoLock.lockFile = ./Cargo.lock;
 
-          nativeBuildInputs = with pkgs; [ pkg-config makeWrapper ];
+          nativeBuildInputs = nativeDeps pkgs;
           buildInputs = runtimeDeps pkgs;
+
+          # Several of Smithay's deps (drm-rs, gbm-rs, input-rs...) use
+          # bindgen at build time, which needs libclang.
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
           postInstall = ''
             install -Dm644 ${./alice-wm.desktop} \
               $out/share/wayland-sessions/alice-wm.desktop
           '';
 
-          # Wrap so dynamically-loaded libs (EGL/Vulkan drivers, libinput
+          # Wrap so dynamically-loaded libs (EGL/GBM/DRM drivers, libinput
           # backends, etc.) are found at runtime, not just link time.
           postFixup = ''
             wrapProgram $out/bin/alice-wm \
@@ -70,9 +88,36 @@
         packages.alice-wm = alice-wm;
 
         devShells.default = pkgs.mkShell {
-          nativeBuildInputs = [ rustToolchain pkgs.pkg-config ];
+          nativeBuildInputs = [ rustToolchain pkgs.rustfmt pkgs.clippy ] ++ nativeDeps pkgs;
           buildInputs = runtimeDeps pkgs;
+
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (runtimeDeps pkgs);
+
+          PKG_CONFIG_PATH = pkgs.lib.makeSearchPath "lib/pkgconfig" (runtimeDeps pkgs);
+
+          # Convenience default for interactive dev sessions; NixOS
+          # sessions set the real one via pam/logind, this is just a
+          # sane fallback matching the original shell.nix.
+          XDG_RUNTIME_DIR = "/run/user/1000";
+
+          shellHook = ''
+            echo "alice-wm development environment"
+            echo "======================================"
+            echo ""
+            echo "To build alice-wm:"
+            echo "  cargo build --release"
+            echo ""
+            echo "To run alice-wm (requires appropriate permissions):"
+            echo "  cargo run --release"
+            echo ""
+            echo "Note: Running a Wayland compositor may require:"
+            echo "  - Being in the 'input' and 'video' groups"
+            echo "  - Access to /dev/dri and /dev/input devices"
+            echo "  - Setting XDG_RUNTIME_DIR if not already set"
+            echo ""
+          '';
         };
       }
     ) // {
@@ -81,4 +126,3 @@
       nixosModules.alice-wm = self.nixosModules.default;
     };
 }
-
