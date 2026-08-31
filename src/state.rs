@@ -101,7 +101,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         let layer_shell_state = WlrLayerShellState::new::<Alice<BackendData>>(&dh);
 
-        Self {
+        let mut out = Self {
             backend_data: backend,
 
             start_time,
@@ -131,7 +131,9 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             seat,
 
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
-        }
+        };
+        out.apply_keyboard_layout();
+        out
     }
 
     fn init_wayland_listener(
@@ -1052,12 +1054,30 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             false
         }
     }
+    /// Re-applies the currently configured keyboard layout (`self.config`'s
+    /// `KeyboardLayout`) to the live seat keyboard. Called after a config
+    /// reload so `keyboard_layout(...)` changes take effect without
+    /// restarting the compositor.
+    fn apply_keyboard_layout(&mut self) {
+        // Clone the layout out of `self.config` first so the `XkbConfig` we
+        // build below borrows from this local instead of from `self`,
+        // letting us still pass `&mut self` to `set_xkb_config`.
+        let layout = self.config.keyboard_layout().clone();
+        let xkb_config = layout.as_xkb_config();
+
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            if let Err(err) = keyboard.set_xkb_config(self, xkb_config) {
+                eprintln!("Failed to apply keyboard layout: {err}");
+            }
+        }
+    }
 
     fn handle_action(&mut self, action: Action) {
         match action {
             Action::Quit => std::process::exit(0),
             Action::ReloadConfig => {
                 self.config = BackendData::make_config();
+                self.apply_keyboard_layout();
             }
             Action::Close => {
                 let Some(info) = self.window_registry.get_focused() else {
