@@ -74,6 +74,13 @@
               --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath (runtimeDeps pkgs)}
           '';
 
+          # services.displayManager.sessionPackages requires packages to
+          # declare which session(s) they ship, matching the DesktopNames
+          # in the .desktop file installed above. Without this, NixOS
+          # rejects the package with "not of type `package with provided
+          # sessions'".
+          passthru.providedSessions = [ "alice-wm" ];
+
           meta = with pkgs.lib; {
             description = "A Smithay-based Wayland compositor";
             homepage = "https://github.com/you/alice-wm";
