@@ -1135,10 +1135,10 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 _ = self.focus_up();
             }
             Action::MoveDownStack => {
-                _ = self.focus_down();
+                _ = self.move_down();
             }
             Action::MoveUpStack => {
-                _ = self.focus_up();
+                _ = self.move_up();
             }
             Action::FocusOutputLeft => {
                 self.focus_output_direction(crate::output::Direction::Left);
