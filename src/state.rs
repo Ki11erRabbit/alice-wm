@@ -148,13 +148,13 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         loop_handle
             .insert_source(listening_socket, move |client_stream, _, state| {
-                //,eprintln!("accepting new client connection");
+                //eprintln!("accepting new client connection");
                 match state
                     .display_handle
                     .insert_client(client_stream, Arc::new(ClientState::default()))
                 {
-                    //,Ok(_) => eprintln!("client inserted successfully"),
-                    //,Err(err) => eprintln!("insert_client failed: {:?}", err),
+                    Ok(_) => eprintln!("client inserted successfully"),
+                    Err(err) => eprintln!("insert_client failed: {:?}", err),
                 }
             })
             .expect("Failed to init the wayland event source.");

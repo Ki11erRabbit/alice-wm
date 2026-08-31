@@ -1,6 +1,6 @@
 use smithay::{
     delegate_xdg_shell,
-    desktop::{find_popup_root_surface, get_popup_toplevel_coords, PopupKind, PopupManager, Space, Window},
+    desktop::{find_popup_root_surface, get_popup_toplevel_coords, PopupKind, Window},
     input::{
         pointer::{Focus, GrabStartData as PointerGrabStartData},
         Seat,
@@ -55,16 +55,28 @@ impl<BackendData: Backend + 'static> XdgShellHandler for Alice<BackendData> {
         //eprintln!("new_toplevel: assigning to output={:?} tag={:?}", output.0, focused_tag.0);
 
         // A toplevel that declares a parent via xdg_toplevel.set_parent is a
-        // transient/dialog window — e.g. the "Save As" file picker a
-        // browser spawns for a download — rather than an independent
-        // application window. Tiling these in with everything else forces
-        // them (and shrinks their parent to make room) into an arbitrary
-        // tile-sized rect they were never designed for, which is exactly
-        // the kind of thing that looks like "the picker never opened": it
-        // did map, just squeezed into half the screen instead of appearing
-        // as the small window it actually is. Keep them out of the tiling
-        // grid entirely (see `relayout_single`/`apply_floating`).
-        let floating = surface.parent().is_some();
+        // transient/dialog window — e.g. the "Save As"/"Open" file picker a
+        // browser spawns for a download or upload — rather than an
+        // independent application window. Tiling these in with everything
+        // else forces them (and shrinks their parent to make room) into an
+        // arbitrary tile-sized rect they were never designed for, which is
+        // exactly the kind of thing that looks like "the picker never
+        // opened": it did map, just squeezed into a tile somewhere instead
+        // of appearing as the small window it actually is. Keep them out of
+        // the tiling grid entirely (see `relayout_single`/`apply_floating`).
+        //
+        // NOTE: we can't check `surface.parent()` here. `set_parent` is a
+        // request the client sends on the xdg_toplevel object — which means
+        // it can only be sent *after* xdg_surface::get_toplevel has created
+        // that object and this `new_toplevel` handler has already run.
+        // `parent()` is therefore always `None` at this point regardless of
+        // what the client will go on to do; every dialog would silently get
+        // tiled instead of floated. The floating flag is determined for
+        // real on the surface's first commit instead (see `handle_commit`
+        // below), by which point any `set_parent` the client sent has
+        // already been applied. Start non-floating here; it gets corrected
+        // (and relayout re-triggered) before the initial configure goes out.
+        let floating = false;
 
         let window = Window::new_wayland_window(surface);
 
@@ -206,13 +218,17 @@ fn check_grab<BackendData: Backend + 'static>(
 }
 
 /// Should be called on `WlSurface::commit`
-pub fn handle_commit(popups: &mut PopupManager, space: &Space<Window>, surface: &WlSurface) {
+pub fn handle_commit<BackendData: Backend + 'static>(state: &mut Alice<BackendData>, surface: &WlSurface) {
     // Handle toplevel commits.
-    if let Some(window) = space
+    let window =  state
+        .space
         .elements()
         .find(|w| w.toplevel().unwrap().wl_surface() == surface)
-        .cloned()
-    {
+        .cloned();
+    if let Some(window) = window {
+        let window = window.clone();
+        let toplevel = window.toplevel().unwrap();
+
         let initial_configure_sent = with_states(surface, |states| {
             states
                 .data_map
@@ -224,13 +240,34 @@ pub fn handle_commit(popups: &mut PopupManager, space: &Space<Window>, surface: 
         });
 
         if !initial_configure_sent {
-            window.toplevel().unwrap().send_configure();
+            // This is the surface's first commit. Any `set_parent` request
+            // the client sent is guaranteed to have already been applied by
+            // now (unlike at `new_toplevel` time — see the comment there),
+            // so this is the first point we can trust `parent()`. Recompute
+            // `floating` for real here and relayout if it changed, before
+            // the initial configure (which carries the tiled-vs-floating
+            // size hint) goes out to the client.
+            let floating = toplevel.parent().is_some();
+            if let Some(id) = state.window_registry.find_by_surface(surface) {
+                if let Some(info) = state.window_registry.get_mut(&id) {
+                    if info.floating != floating {
+                        info.floating = floating;
+                        let scope = LayoutScope {
+                            output: info.output,
+                            tag: info.tag,
+                        };
+                        state.relayout(Some(scope));
+                    }
+                }
+            }
+
+            toplevel.send_configure();
         }
     }
 
     // Handle popup commits.
-    popups.commit(surface);
-    if let Some(popup) = popups.find_popup(surface) {
+    state.popups.commit(surface);
+    if let Some(popup) = state.popups.find_popup(surface) {
         match popup {
             PopupKind::Xdg(ref xdg) => {
                 if !xdg.is_initial_configure_sent() {
