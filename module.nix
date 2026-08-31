@@ -40,10 +40,24 @@ in
     # rather than going through logind directly.
     services.seatd.enable = lib.mkDefault true;
 
-    # Needed for screen sharing / portals under wlroots-protocol compositors.
+    # xdg-desktop-portal-wlr only implements the screen-capture portals
+    # (ScreenCast/Screenshot) — it has no FileChooser implementation. With
+    # only -wlr installed, any app that asks the portal for a file picker
+    # (Flatpak apps, and native apps/browsers configured to use the portal
+    # for their "Open"/"Save As" dialogs) gets no backend able to service
+    # the request at all: the D-Bus call just fails, so no dialog window is
+    # ever created for the compositor to show. xdg-desktop-portal-gtk
+    # provides FileChooser (and the other generic portals); keep -wlr for
+    # screen capture specifically, since -gtk doesn't implement that under
+    # a non-GNOME wlroots-style compositor.
     xdg.portal = {
       enable = lib.mkDefault true;
-      extraPortals = lib.mkDefault [ pkgs.xdg-desktop-portal-wlr ];
+      extraPortals = lib.mkDefault [ pkgs.xdg-desktop-portal-wlr pkgs.xdg-desktop-portal-gtk ];
+      config.common = lib.mkDefault {
+        default = [ "gtk" ];
+        "org.freedesktop.impl.portal.ScreenCast" = [ "wlr" ];
+        "org.freedesktop.impl.portal.Screenshot" = [ "wlr" ];
+      };
     };
 
     security.polkit.enable = true;

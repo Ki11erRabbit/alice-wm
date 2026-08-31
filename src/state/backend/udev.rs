@@ -16,7 +16,7 @@ use smithay::{
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{UdevBackend, UdevEvent, primary_gpu},
     },
-    desktop::{Window, space::SpaceRenderElements},
+    desktop::{Window, space::{SpaceRenderElements, space_render_elements}},
     output::{Mode as WlMode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::{EventLoop, LoopHandle},
@@ -27,7 +27,6 @@ use smithay::{
     },
     utils::{DeviceFd, Transform}, wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
 };
-use smithay::desktop::space::OutputError;
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 
 use crate::{Alice, CalloopData, config::Config, state::backend::Backend};
@@ -691,9 +690,20 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     let output = surface.output.clone();
 
     let space_elements: Vec<UdevRenderElement<'_>> =
-        match alice.space.render_elements_for_output(&mut renderer, &output, 1.0) {
+        // `Space::render_elements_for_output` (the method) positions layer-shell
+        // elements using only the output's own location, never the position
+        // `LayerMap::arrange` actually computed for them (`layer_geometry`) — so
+        // every layer surface (panels, bars, launchers) renders pinned near its
+        // own local (0, 0) regardless of anchor/centering, while hit-testing
+        // (which does read `layer_geometry` — see `Alice::layer_under` /
+        // `surface_under`) reports the correct arranged position. The visible
+        // result is a bar stuck in a corner whose click target is wherever it
+        // was actually supposed to be. `space_render_elements` (the free
+        // function; this is what winit's `render_output` already uses
+        // internally, which is why this backend didn't show the bug) builds the
+        // same element list but positions layers via `layer_geometry` correctly.
+        match space_render_elements(&mut renderer, [&alice.space], &output, 1.0) {
             Ok(elements) => elements,
-            Err(OutputError::Unmapped) => return,
             Err(err) => {
                 eprintln!("Failed to gather render elements for {:?}: {:?}", output.name(), err);
                 return;
