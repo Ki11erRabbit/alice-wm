@@ -67,9 +67,10 @@ impl Backend for WinitData {
         alice.outputs.insert(output.clone());
         output.create_global::<Alice<Self>>(&display_handle);
 
-        unsafe {
-            std::env::set_var("WAYLAND_DISPLAY", &alice.socket_name);
-        }
+        // WAYLAND_DISPLAY/XDG_CURRENT_DESKTOP are exported (to our own
+        // process env *and* the D-Bus/systemd activation environment) by
+        // Alice::new -> export_activation_environment, right after the
+        // socket is created.
 
         let data = CalloopData {
             state: alice,

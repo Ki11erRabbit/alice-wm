@@ -31,6 +31,15 @@
         # X11 libs, for Xwayland support
         xorg.libX11
         xorg.libxcb
+
+        # Provides dbus-update-activation-environment, which alice-wm shells
+        # out to at startup so D-Bus-activated services (notably
+        # xdg-desktop-portal) inherit WAYLAND_DISPLAY/XDG_CURRENT_DESKTOP.
+        # Most NixOS systems already have this on PATH via the system dbus
+        # service, but we depend on it explicitly (and wrap PATH below) so
+        # alice-wm doesn't silently lose file-picker support on a system
+        # where it isn't.
+        dbus
       ];
 
       # Build-time-only tooling (pkg-config, bindgen's libclang, etc.)
@@ -71,7 +80,8 @@
           # backends, etc.) are found at runtime, not just link time.
           postFixup = ''
             wrapProgram $out/bin/alice-wm \
-              --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath (runtimeDeps pkgs)}
+              --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath (runtimeDeps pkgs)} \
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.dbus ]}
           '';
 
           # services.displayManager.sessionPackages requires packages to

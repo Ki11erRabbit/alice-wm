@@ -267,9 +267,10 @@ impl Backend for UdevData {
                 }
             })?;
 
-        unsafe {
-            std::env::set_var("WAYLAND_DISPLAY", &alice.socket_name);
-        }
+        // WAYLAND_DISPLAY/XDG_CURRENT_DESKTOP are exported (to our own
+        // process env *and* the D-Bus/systemd activation environment) by
+        // Alice::new -> export_activation_environment, right after the
+        // socket is created above.
 
         Ok(CalloopData { state: alice, display_handle })
     }

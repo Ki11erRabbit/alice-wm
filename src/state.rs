@@ -92,6 +92,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let space = Space::default();
 
         let socket_name = Self::init_wayland_listener(display, event_loop);
+        Self::export_activation_environment(&socket_name);
 
         // Get the loop signal, used to stop the event loop
         let loop_signal = event_loop.get_signal();
@@ -176,6 +177,56 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             .unwrap();
 
         socket_name
+    }
+
+    /// Publishes WAYLAND_DISPLAY / XDG_CURRENT_DESKTOP into both our own
+    /// process environment and the systemd user manager / D-Bus session
+    /// activation environment.
+    ///
+    /// Setting `std::env::set_var` alone (which is all the udev/winit
+    /// backend setup used to do) only affects *this* process and anything
+    /// it `fork`s afterwards, e.g. autostart commands run via `Self::spawn`.
+    /// It does nothing for services that are D-Bus-activated on demand,
+    /// which is exactly how xdg-desktop-portal and its backends
+    /// (xdg-desktop-portal-gtk, -wlr, ...) are started. Those inherit the
+    /// systemd --user manager's environment as it was at login, which
+    /// predates the compositor and so never contains our Wayland socket
+    /// name. The portal process then has no display to connect to, so
+    /// when an app asks it to open a file picker the D-Bus call succeeds
+    /// but no window is ever created for us to show — the picker silently
+    /// "does nothing" instead of erroring visibly.
+    ///
+    /// `dbus-update-activation-environment --systemd` pushes the named
+    /// variables into both the D-Bus session bus's activation environment
+    /// and the systemd --user manager's environment, so anything they
+    /// spawn from here on (including the portal, launched lazily the
+    /// first time an app calls it) sees them.
+    fn export_activation_environment(socket_name: &OsString) {
+        unsafe {
+            std::env::set_var("WAYLAND_DISPLAY", socket_name);
+            std::env::set_var("XDG_CURRENT_DESKTOP", "alice-wm");
+        }
+
+        let status = std::process::Command::new("dbus-update-activation-environment")
+            .arg("--systemd")
+            .arg("WAYLAND_DISPLAY")
+            .arg("XDG_CURRENT_DESKTOP")
+            .status();
+
+        match status {
+            Ok(status) if status.success() => {}
+            Ok(status) => eprintln!(
+                "dbus-update-activation-environment exited with {status}; \
+                 D-Bus-activated services (e.g. xdg-desktop-portal) may not \
+                 see WAYLAND_DISPLAY/XDG_CURRENT_DESKTOP"
+            ),
+            Err(err) => eprintln!(
+                "failed to run dbus-update-activation-environment: {err}; \
+                 D-Bus-activated services (e.g. xdg-desktop-portal) may not \
+                 see WAYLAND_DISPLAY/XDG_CURRENT_DESKTOP. Is dbus installed \
+                 and on PATH?"
+            ),
+        }
     }
 
     /// Finds the topmost layer-shell surface under `pos`, restricted to the
