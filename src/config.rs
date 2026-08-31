@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use mlua::{FromLua, Lua, MetaMethod, Table, UserData};
-use smithay::input::keyboard::{Keysym, ModifiersState};
+use smithay::input::keyboard::{Keysym, ModifiersState, XkbConfig};
 use smithay::utils::Transform;
 
 use crate::output::TagId;
@@ -174,10 +174,42 @@ impl OutputPosition {
     }
 }
 
+/// A user-configured XKB keyboard layout. Every field maps directly onto a
+/// field of `xkbcommon`'s `XkbConfig`. Anything left unset (`None`) falls
+/// back to the `XKB_DEFAULT_*` environment variables, and if those are also
+/// unset, to xkbcommon's own defaults (typically a plain US layout).
+#[derive(Clone, Default)]
+pub struct KeyboardLayout {
+    /// The rules file used to interpret `model`/`layout`/`variant`/`options`
+    /// (e.g. `"evdev"`).
+    pub rules: Option<String>,
+    /// The keyboard model (e.g. `"pc105"`).
+    pub model: Option<String>,
+    /// A comma-separated list of layouts (e.g. `"us,ru"`).
+    pub layout: Option<String>,
+    /// A comma-separated list of variants, one per layout (e.g. `",phonetic"`).
+    pub variant: Option<String>,
+    /// A comma-separated list of options (e.g. `"grp:win_space_toggle"`).
+    pub options: Option<String>,
+}
+
+impl KeyboardLayout {
+    pub fn as_xkb_config(&self) -> XkbConfig<'_> {
+        XkbConfig {
+            rules: self.rules.as_deref().unwrap_or(""),
+            model: self.model.as_deref().unwrap_or(""),
+            layout: self.layout.as_deref().unwrap_or(""),
+            variant: self.variant.as_deref().unwrap_or(""),
+            options: self.options.clone(),
+        }
+    }
+}
+
 pub struct Config {
     map: HashMap<KeyPress, Action>,
     output_positions: HashMap<String, OutputPosition>,
     auto_start: Vec<String>,
+    keyboard_layout: KeyboardLayout,
 }
 
 impl Config {
@@ -186,6 +218,7 @@ impl Config {
             map: HashMap::new(),
             output_positions: HashMap::new(),
             auto_start: Vec::new(),
+            keyboard_layout: KeyboardLayout::default(),
         }
     }
 
@@ -211,6 +244,17 @@ impl Config {
 
     pub fn autostarts(&self) -> impl Iterator<Item = &String> {
         self.auto_start.iter()
+    }
+    /// The currently configured keyboard layout. Defaults to
+    /// `KeyboardLayout::default()` (i.e. deferring to the `XKB_DEFAULT_*`
+    /// environment variables / xkbcommon defaults) if the user hasn't called
+    /// `keyboard_layout(...)` in their config.
+    pub fn keyboard_layout(&self) -> &KeyboardLayout {
+        &self.keyboard_layout
+    }
+
+    pub fn set_keyboard_layout(&mut self, layout: KeyboardLayout) {
+        self.keyboard_layout = layout;
     }
 }
 
@@ -394,6 +438,7 @@ impl Default for Config {
             map,
             output_positions: HashMap::new(),
             auto_start: Vec::new(),
+            keyboard_layout: KeyboardLayout::default(),
         }
     }
 }
@@ -614,6 +659,41 @@ fn load_config(use_alt: bool, file_text: &str) -> mlua::Result<Config> {
         let config = config_clone.clone();
         let mut guard = config.borrow_mut();
         guard.set_output_position(name, position);
+        Ok(())
+    })?)?;
+
+    let config_clone = config.clone();
+
+    // keyboard_layout(layout, opts?) — sets the XKB keyboard layout(s) to
+    // use, e.g.:
+    //   keyboard_layout("us")
+    //   keyboard_layout("us,ru", {
+    //       variant = ",phonetic",     -- one variant per layout
+    //       options = "grp:win_space_toggle",
+    //       model = "pc105",
+    //       rules = "evdev",
+    //   })
+    // `layout` is a comma-separated list of layouts to load; `opts` is an
+    // optional table of `variant`, `model`, `rules`, and `options` strings,
+    // each mapping directly onto xkbcommon's config of the same name. Any
+    // field left unset falls back to the `XKB_DEFAULT_*` environment
+    // variables, then to xkbcommon's own defaults.
+    lua.globals().set("keyboard_layout", lua.create_function_mut(move |_, (layout, opts): (String, Option<Table>)| {
+        let mut kb_layout = KeyboardLayout {
+            layout: Some(layout),
+            ..Default::default()
+        };
+
+        if let Some(opts) = opts {
+            kb_layout.variant = opts.get("variant")?;
+            kb_layout.model = opts.get("model")?;
+            kb_layout.rules = opts.get("rules")?;
+            kb_layout.options = opts.get("options")?;
+        }
+
+        let config = config_clone.clone();
+        let mut guard = config.borrow_mut();
+        guard.set_keyboard_layout(kb_layout);
         Ok(())
     })?)?;
 
