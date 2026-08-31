@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=Alice
+Comment=A tiling wayland compositor with support for tablets
+Exec=alice-wm
+Type=Application
+DesktopNames=alice-wm
