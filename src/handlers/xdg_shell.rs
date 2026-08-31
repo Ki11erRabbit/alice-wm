@@ -217,15 +217,14 @@ fn check_grab<BackendData: Backend + 'static>(
     Some(start_data)
 }
 
-/// Should be called on `WlSurface::commit`
-pub fn handle_commit<BackendData: Backend + 'static>(state: &mut Alice<BackendData>, surface: &WlSurface) {
+/// Should be called on `WlSurface::commit`.
+///
+/// `window`, when present, is `surface`'s own toplevel window — resolved
+/// once by the caller (`compositor::commit`) via an O(1) index instead of
+/// scanning every mapped window here on every single commit.
+pub fn handle_commit<BackendData: Backend + 'static>(state: &mut Alice<BackendData>, surface: &WlSurface, window: Option<&Window>) {
     // Handle toplevel commits.
-    let window =  state
-        .space
-        .elements()
-        .find(|w| w.toplevel().unwrap().wl_surface() == surface)
-        .cloned();
-    if let Some(window) = window {
+    if let Some(window) = window.cloned() {
         let window = window.clone();
         let toplevel = window.toplevel().unwrap();
 

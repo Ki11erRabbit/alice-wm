@@ -313,12 +313,13 @@ impl ResizeSurfaceState {
     }
 }
 
-/// Should be called on `WlSurface::commit`
-pub fn handle_commit(space: &mut Space<Window>, surface: &WlSurface) -> Option<()> {
-    let window = space
-        .elements()
-        .find(|w| w.toplevel().unwrap().wl_surface() == surface)
-        .cloned()?;
+/// Should be called on `WlSurface::commit`.
+///
+/// `window`, when present, is `surface`'s own toplevel window — resolved
+/// once by the caller (`compositor::commit`) via an O(1) index instead of
+/// scanning every mapped window here on every single commit.
+pub fn handle_commit(space: &mut Space<Window>, surface: &WlSurface, window: Option<&Window>) -> Option<()> {
+    let window = window?.clone();
 
     let mut window_loc = space.element_location(&window)?;
     let geometry = window.geometry();

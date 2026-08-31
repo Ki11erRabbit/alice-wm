@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use smithay::{desktop::Window, reexports::wayland_server::protocol::wl_surface::WlSurface};
+use smithay::{
+    desktop::Window,
+    reexports::wayland_server::{backend::ObjectId, protocol::wl_surface::WlSurface, Resource},
+};
 
 use crate::output::{LayoutScope, OutputId, TagId};
 
@@ -151,6 +154,14 @@ pub struct WindowRegistry {
     /// This field is to satisfy the typechecker on WindowRegistry::filter
     empty: Vec<WindowId>,
     focused_window: Option<WindowId>,
+    /// O(1) surface -> window lookup, keyed by the toplevel's own wl_surface
+    /// id. Without this, every `wl_surface::commit` — which fires on every
+    /// single frame a client draws, including subsurfaces like video/canvas
+    /// layers, not just toplevel window changes — had to linearly scan every
+    /// mapped window (and previously did so three separate times per commit
+    /// across compositor.rs/xdg_shell.rs/resize_grab.rs) just to find the
+    /// same window, or determine there wasn't one.
+    surface_index: HashMap<ObjectId, WindowId>,
 }
 
 impl WindowRegistry {
@@ -162,6 +173,7 @@ impl WindowRegistry {
             order: HashMap::new(),
             empty: Vec::new(),
             focused_window: None,
+            surface_index: HashMap::new(),
         }
     }
 
@@ -183,6 +195,9 @@ impl WindowRegistry {
             list.push(id);
         })
         .or_insert(LayoutInfo::new(vec![id]));
+        if let Some(toplevel) = info.window.toplevel() {
+            self.surface_index.insert(toplevel.wl_surface().id(), id);
+        }
         self.map.insert(id, info);
         self.focused_window = Some(id);
         id
@@ -192,6 +207,9 @@ impl WindowRegistry {
         let info = self.map.remove(&id);
         self.available_ids.push(id);
         if let Some(info) = info {
+            if let Some(toplevel) = info.window.toplevel() {
+                self.surface_index.remove(&toplevel.wl_surface().id());
+            }
             let Some(layout) = self.order.get_mut(&LayoutScope {
                 output: info.output,
                 tag: info.tag,
@@ -263,10 +281,12 @@ impl WindowRegistry {
         self.focused_window
     }
 
+    /// O(1): only matches a window whose *own* toplevel wl_surface is
+    /// `surface` — i.e. this returns `None` (cheaply) for subsurface/popup
+    /// commits, exactly like the old linear-scan version did, just without
+    /// walking every window to find that out.
     pub fn find_by_surface(&self, surface: &WlSurface) -> Option<WindowId> {
-        self.map.iter()
-            .find(|(_, info)| info.window.toplevel().map(|t| t.wl_surface()) == Some(surface))
-            .map(|(id, _)| *id)
+        self.surface_index.get(&surface.id()).copied()
     }
 
 }

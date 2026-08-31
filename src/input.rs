@@ -127,9 +127,12 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                             Some(window.toplevel().unwrap().wl_surface().clone()),
                             serial,
                         );
-                        self.space.elements().for_each(|window| {
-                            window.toplevel().unwrap().send_pending_configure();
-                        });
+                        // Only the window whose activated state actually
+                        // changes needs a new configure — reconfiguring
+                        // every mapped window on every click made every
+                        // client (not just the focused one) redo layout on
+                        // every single mouse click.
+                        window.toplevel().unwrap().send_pending_configure();
                     } else if let Some(layer) = self.layer_under(pos, &[
                         smithay::wayland::shell::wlr_layer::Layer::Bottom,
                         smithay::wayland::shell::wlr_layer::Layer::Background,
