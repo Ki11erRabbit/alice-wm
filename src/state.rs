@@ -17,7 +17,7 @@ use smithay::{
     }
 };
 
-use crate::{CalloopData, config::{Action, Config, KeyPress, execute_lua_config}, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputInfo, Outputs, TagId}, state::backend::{Backend, udev::UdevData, winit::WinitData}, window::{LayoutInfo, WindowId, WindowRegistry}};
+use crate::{CalloopData, config::{Action, Config, KeyPress, execute_lua_config}, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputId, OutputInfo, Outputs, TagId}, state::backend::{Backend, udev::UdevData, winit::WinitData}, window::{LayoutInfo, WindowId, WindowRegistry}};
 
 pub struct Alice<BackendData: Backend + 'static> {
     pub backend_data: BackendData,
@@ -702,6 +702,35 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         self.window_registry.change_focus(new_focus);
 
         self.relayout(Some(LayoutScope { output, tag }));
+        Some(())
+    }
+
+    pub fn move_to_output(&mut self, direction: crate::output::Direction) -> Option<()> {
+        let new_output_id = self.select_output_direction(direction)?;
+        let info = self.window_registry.get_focused()?;
+        let window = info.window.clone();
+        self.space.unmap_elem(&window);
+        let id = self.window_registry.find(window)?;
+        let current_tag = info.tag;
+        let stack = self.window_registry.get_stack_mut(&LayoutScope {
+            output: info.output,
+            tag: info.tag,
+        })?;
+
+        stack.remove_window(id);
+
+        let tag = self.outputs.get_focused_tag(new_output_id).unwrap_or(TagId(0));
+
+        self.window_registry.stack_entry(LayoutScope { output: new_output_id, tag })
+            .and_modify(|stack| { stack.push(id); })
+            .or_insert(LayoutInfo::new(vec![id]));
+
+        // Keep the window's own metadata in sync with which stack it now lives in.
+        if let Some(window_info) = self.window_registry.get_mut(&id) {
+            window_info.tag = tag;
+        }
+
+        self.focus_output(new_output_id);
         Some(())
     }
 
