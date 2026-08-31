@@ -1,7 +1,7 @@
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::PopupSurface;
-use smithay::wayland::shell::wlr_layer::{Anchor, KeyboardInteractivity, LayerSurfaceCachedState};
+use smithay::wayland::shell::wlr_layer::{Anchor, ExclusiveZone, KeyboardInteractivity, LayerSurfaceCachedState};
 use smithay::{output::Output, wayland::shell::wlr_layer::WlrLayerShellHandler};
 use smithay::desktop::{LayerSurface as DesktopLayerSurface, layer_map_for_output};
 use smithay::utils::{Logical, Rectangle, Size, SERIAL_COUNTER};
@@ -11,26 +11,65 @@ use crate::output::LayoutScope;
 use crate::state::backend::Backend;
 use crate::state::backend::winit::WinitData;
 
+/// The output's own logical rectangle at (0, 0) — i.e. exactly what
+/// `LayerMap::arrange` computes internally as `output_rect`. Kept in sync with
+/// that computation so a `DontCare` surface's suggested size (see
+/// `suggested_size` below) always matches how it will actually be arranged.
+fn output_rect(output: &Output) -> Rectangle<i32, Logical> {
+    Rectangle::from_size(
+        output
+            .current_mode()
+            .map(|mode| {
+                let logical_size = mode
+                    .size
+                    .to_f64()
+                    .to_logical(output.current_scale().fractional_scale())
+                    .to_i32_round();
+                output.current_transform().transform_size(logical_size)
+            })
+            .unwrap_or_else(|| (0, 0).into()),
+    )
+}
+
 /// The wlr-layer-shell protocol expects the compositor to hint a real size on any
 /// axis the surface has anchored to both opposing edges (it needs to know how much
 /// space to fill). On an axis that isn't fully anchored, 0 tells the client "you
 /// decide" (this is how a centered, content-sized popup like wofi is meant to work).
-fn suggested_size(surface: &WlSurface, zone: Rectangle<i32, Logical>) -> Size<i32, Logical> {
-    let anchor = with_states(surface, |states| {
-        states
+///
+/// The area used for that hint has to match what `LayerMap::arrange` will
+/// actually use to place the surface, or the two disagree about how wide/tall
+/// "fill" means: a surface that doesn't reserve space (`ExclusiveZone::DontCare`,
+/// e.g. a floating/centered bar with no `set_exclusive_zone` call) is always
+/// arranged against the *whole* output, ignoring other surfaces' reservations —
+/// but a surface that does reserve space is arranged against the
+/// (already-shrunk-by-other-reservations) non-exclusive zone. Previously this
+/// always used the non-exclusive zone regardless of the surface's own exclusive
+/// zone, so a `DontCare` surface anchored to fill an axis could be told a
+/// too-small size whenever some other layer surface on the same output (a dock,
+/// another bar, ...) was reserving space — it would then commit a buffer sized
+/// to that smaller hint, while actually getting *placed* as if it spanned the
+/// full output, leaving it flush to one side instead of centered/filling.
+fn suggested_size(surface: &WlSurface, output_rect: Rectangle<i32, Logical>, zone: Rectangle<i32, Logical>) -> Size<i32, Logical> {
+    let data = with_states(surface, |states| {
+        *states
             .cached_state
             .get::<LayerSurfaceCachedState>()
             .current()
-            .anchor
     });
 
+    let source = match data.exclusive_zone {
+        ExclusiveZone::Exclusive(_) | ExclusiveZone::Neutral => zone,
+        ExclusiveZone::DontCare => output_rect,
+    };
+
+    let anchor = data.anchor;
     let width = if anchor.contains(Anchor::LEFT) && anchor.contains(Anchor::RIGHT) {
-        zone.size.w
+        source.size.w
     } else {
         0
     };
     let height = if anchor.contains(Anchor::TOP) && anchor.contains(Anchor::BOTTOM) {
-        zone.size.h
+        source.size.h
     } else {
         0
     };
@@ -136,7 +175,7 @@ pub fn handle_commit<BackendData: Backend + 'static>(state: &mut Alice<BackendDa
         let zone = map.non_exclusive_zone();
         drop(map);
 
-        let size = suggested_size(info.surface.wl_surface(), zone);
+        let size = suggested_size(info.surface.wl_surface(), output_rect(&output), zone);
         info.surface.layer_surface().with_pending_state(|pending| {
             pending.size = Some(size);
         });

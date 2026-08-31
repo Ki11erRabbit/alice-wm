@@ -238,6 +238,54 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         under_layer(wlr_layer::Layer::Bottom).or_else(|| under_layer(wlr_layer::Layer::Background))
     }
 
+    /// Clamp a pointer position to the combined area of every mapped
+    /// output, instead of to a single one. Motion handlers previously
+    /// clamped to `self.space.outputs().next()` unconditionally, which
+    /// pinned the cursor to whichever output happened to be first in the
+    /// space's (arbitrary) iteration order and made it physically
+    /// impossible to move onto any other output.
+    ///
+    /// This mirrors the approach used by other Smithay compositors: clamp
+    /// x against the full span of all outputs, then clamp y against
+    /// whichever output the clamped x actually falls under (falling back to
+    /// leaving y untouched if it doesn't land on any output, e.g. in the
+    /// gap between two outputs of different heights).
+    pub fn clamp_to_outputs(&self, pos: Point<f64, Logical>) -> Point<f64, Logical> {
+        if self.space.outputs().next().is_none() {
+            return pos;
+        }
+
+        let min_x = self
+            .space
+            .outputs()
+            .filter_map(|o| self.space.output_geometry(o))
+            .map(|geo| geo.loc.x)
+            .min()
+            .unwrap_or(0);
+        let max_x = self
+            .space
+            .outputs()
+            .filter_map(|o| self.space.output_geometry(o))
+            .map(|geo| geo.loc.x + geo.size.w)
+            .max()
+            .unwrap_or(0);
+        let clamped_x = pos.x.clamp(min_x as f64, max_x as f64);
+
+        let y_bounds = self
+            .space
+            .outputs()
+            .filter_map(|o| self.space.output_geometry(o))
+            .find(|geo| clamped_x >= geo.loc.x as f64 && clamped_x <= (geo.loc.x + geo.size.w) as f64)
+            .map(|geo| (geo.loc.y, geo.loc.y + geo.size.h));
+
+        let clamped_y = match y_bounds {
+            Some((min_y, max_y)) => pos.y.clamp(min_y as f64, max_y as f64),
+            None => pos.y,
+        };
+
+        (clamped_x, clamped_y).into()
+    }
+
     /// Pass in an scope to target only that output
     pub fn relayout(&mut self, scope: Option<LayoutScope>) {
         if let Some(scope) = scope {
@@ -709,12 +757,13 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let new_output_id = self.select_output_direction(direction)?;
         let info = self.window_registry.get_focused()?;
         let window = info.window.clone();
+        let old_output = info.output;
+        let old_tag = info.tag;
         self.space.unmap_elem(&window);
         let id = self.window_registry.find(window)?;
-        let current_tag = info.tag;
         let stack = self.window_registry.get_stack_mut(&LayoutScope {
-            output: info.output,
-            tag: info.tag,
+            output: old_output,
+            tag: old_tag,
         })?;
 
         stack.remove_window(id);
@@ -725,12 +774,28 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             .and_modify(|stack| { stack.push(id); })
             .or_insert(LayoutInfo::new(vec![id]));
 
-        // Keep the window's own metadata in sync with which stack it now lives in.
+        // Keep the window's own metadata in sync with which output/stack it
+        // now lives in. Previously only `tag` was updated here, leaving
+        // `window_info.output` pointing at the output the window just left
+        // while the layout stacks already thought it belonged to the new
+        // one — that split state, combined with never re-mapping the window
+        // below, is what let it linger half-associated with both outputs.
         if let Some(window_info) = self.window_registry.get_mut(&id) {
+            window_info.output = new_output_id;
             window_info.tag = tag;
         }
 
         self.focus_output(new_output_id);
+
+        // Reflow the output the window left, so the remaining windows there
+        // fill the gap, and the output it landed on, so it actually gets
+        // mapped back into the space at its new position. Without this the
+        // window stayed unmapped (from the `unmap_elem` above) until some
+        // unrelated event happened to trigger a relayout touching one of
+        // these scopes, which is what produced the flicker/"on two
+        // displays" symptom.
+        self.relayout(Some(LayoutScope { output: old_output, tag: old_tag }));
+        self.relayout(Some(LayoutScope { output: new_output_id, tag }));
         Some(())
     }
 

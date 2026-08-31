@@ -39,12 +39,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 let serial = SERIAL_COUNTER.next_serial();
                 let pointer = self.seat.get_pointer().unwrap();
 
-                let output = self.space.outputs().next().unwrap();
-                let output_geo = self.space.output_geometry(output).unwrap();
-
-                let mut pos = pointer.current_location() + event.delta();
-                pos.x = pos.x.clamp(output_geo.loc.x as f64, (output_geo.loc.x + output_geo.size.w) as f64);
-                pos.y = pos.y.clamp(output_geo.loc.y as f64, (output_geo.loc.y + output_geo.size.h) as f64);
+                let pos = self.clamp_to_outputs(pointer.current_location() + event.delta());
 
                 let under = self.surface_under(pos);
                 let surface_under = self.space.element_under(pos);

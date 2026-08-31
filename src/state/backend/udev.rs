@@ -70,6 +70,16 @@ pub struct SurfaceData {
     pub drm_output: DrmOutput<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>,
     pub damage_tracker: OutputDamageTracker,
     pub output: Output,
+    /// True from the moment a frame is successfully handed to
+    /// `queue_frame` until the matching `DrmEvent::VBlank` fires and
+    /// `frame_finish` clears it. While a frame is in flight for this CRTC,
+    /// `schedule_render` must not render+queue again — page-flips are only
+    /// permitted once per retrace, and doing so anyway is what pegs the
+    /// compositor to however fast input/commit events arrive instead of the
+    /// output's actual refresh rate. `frame_finish` (driven by the real
+    /// vblank event) is what re-renders once this clears, so pacing follows
+    /// the display instead of the event source.
+    pub frame_pending: bool,
 }
 
 pub struct UdevData {
@@ -270,11 +280,27 @@ impl Backend for UdevData {
     fn update_led_state(&mut self, _led_state: smithay::input::keyboard::LedState) {}
 
     fn schedule_render(alice: &mut Alice<Self>) {
+        // Only kick off a render for CRTCs that are currently idle (no
+        // frame in flight). `schedule_render` is called very frequently
+        // (every pointer motion, every surface commit, ...) — far more
+        // often than any output's refresh rate — so rendering unconditionally
+        // here would submit frames as fast as events arrive rather than as
+        // fast as the display can show them. For a CRTC that already has a
+        // queued frame, we do nothing: `frame_finish` re-renders with
+        // whatever the latest state is as soon as that frame's vblank
+        // fires, so nothing is lost by waiting.
         let targets: Vec<(DrmNode, crtc::Handle)> = alice
             .backend_data
             .backends
             .iter()
-            .flat_map(|(node, backend)| backend.surfaces.keys().map(move |crtc| (*node, *crtc)))
+            .flat_map(|(node, backend)| {
+                backend
+                    .surfaces
+                    .iter()
+                    .filter(|(_, surface)| !surface.frame_pending)
+                    .map(|(crtc, _)| (*node, *crtc))
+                    .collect::<Vec<_>>()
+            })
             .collect();
         for (node, crtc) in targets {
             render_surface(alice, node, crtc);
@@ -567,6 +593,7 @@ fn connector_connected(
                     drm_output,
                     damage_tracker: OutputDamageTracker::from_output(&output),
                     output: output.clone(),
+                    frame_pending: false,
                 },
             );
             drop(renderer);
@@ -635,6 +662,10 @@ pub fn frame_finish(
         return;
     }
 
+    // The in-flight frame's vblank has landed: this CRTC is idle again
+    // until (and unless) the render below queues another one.
+    surface.frame_pending = false;
+
     render_surface(alice, node, crtc);
 }
 
@@ -697,6 +728,10 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         Ok(res) if !res.is_empty => {
             if let Err(err) = surface.drm_output.queue_frame(()) {
                 eprintln!("Failed to queue frame on crtc {:?}: {}", crtc, err);
+            } else {
+                // A page-flip is now in flight; schedule_render will leave
+                // this CRTC alone until frame_finish sees its vblank.
+                surface.frame_pending = true;
             }
         }
         Ok(_) => {}
