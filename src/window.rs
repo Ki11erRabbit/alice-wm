@@ -289,4 +289,13 @@ impl WindowRegistry {
         self.surface_index.get(&surface.id()).copied()
     }
 
+    pub fn fullscreen_window_for_output(&self, scope: &LayoutScope) -> Option<Window> {
+        let iter = self.filter(&scope);
+        for id in iter {
+            if let Some(window) = self.get(&id) {
+                return Some(window.window.clone());
+            }
+        }
+        None
+    }
 }

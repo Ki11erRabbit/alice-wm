@@ -16,8 +16,8 @@ use smithay::{
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{UdevBackend, UdevEvent, primary_gpu},
     },
-    desktop::{Window, space::{SpaceRenderElements, space_render_elements}},
-    output::{Mode as WlMode, Output, PhysicalProperties, Scale, Subpixel},
+    desktop::{Space, Window, layer_map_for_output, space::{SpaceRenderElements, space_render_elements}},
+    output::{Mode as WlMode, Output, OutputNoMode, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::{EventLoop, LoopHandle},
         drm::control::{ModeTypeFlags, connector, crtc},
@@ -25,11 +25,11 @@ use smithay::{
         rustix::fs::OFlags,
         wayland_server::Display,
     },
-    utils::{DeviceFd, Transform}, wayland::dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
+    utils::{DeviceFd, Transform}, wayland::{dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier}, shell::wlr_layer::Layer},
 };
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 
-use crate::{Alice, CalloopData, config::Config, state::backend::Backend};
+use crate::{Alice, CalloopData, config::Config, output::LayoutScope, state::backend::Backend};
 
 // ---------------------------------------------------------------------
 // Types
@@ -690,24 +690,45 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     };
     let output = surface.output.clone();
 
+    let Some(info) = alice.outputs.get(&output.name()) else {
+        return;
+    };
+    let Some(tag) = alice.outputs.get_focused_tag(info.id) else {
+        return
+    };
+    let scope = LayoutScope {
+        output: info.id,
+        tag,
+    };
+
     let space_elements: Vec<UdevRenderElement<'_>> =
-        // `Space::render_elements_for_output` (the method) positions layer-shell
-        // elements using only the output's own location, never the position
-        // `LayerMap::arrange` actually computed for them (`layer_geometry`) — so
-        // every layer surface (panels, bars, launchers) renders pinned near its
-        // own local (0, 0) regardless of anchor/centering, while hit-testing
-        // (which does read `layer_geometry` — see `Alice::layer_under` /
-        // `surface_under`) reports the correct arranged position. The visible
-        // result is a bar stuck in a corner whose click target is wherever it
-        // was actually supposed to be. `space_render_elements` (the free
-        // function; this is what winit's `render_output` already uses
-        // internally, which is why this backend didn't show the bug) builds the
-        // same element list but positions layers via `layer_geometry` correctly.
-        match space_render_elements(&mut renderer, [&alice.space], &output, 1.0) {
-            Ok(elements) => elements,
-            Err(err) => {
-                eprintln!("Failed to gather render elements for {:?}: {:?}", output.name(), err);
-                return;
+        if let Some(fs_window) = alice.window_registry.fullscreen_window_for_output(&scope) {
+            match fullscreen_output_elements(&mut renderer, &alice.space, &output, &fs_window, 1.0) {
+                Ok(elements) => elements,
+                Err(err) => {
+                    eprintln!("Failed to gather render elements for {:?}: {:?}", output.name(), err);
+                    return;
+                }
+            }
+        } else {
+            // `Space::render_elements_for_output` (the method) positions layer-shell
+            // elements using only the output's own location, never the position
+            // `LayerMap::arrange` actually computed for them (`layer_geometry`) — so
+            // every layer surface (panels, bars, launchers) renders pinned near its
+            // own local (0, 0) regardless of anchor/centering, while hit-testing
+            // (which does read `layer_geometry` — see `Alice::layer_under` /
+            // `surface_under`) reports the correct arranged position. The visible
+            // result is a bar stuck in a corner whose click target is wherever it
+            // was actually supposed to be. `space_render_elements` (the free
+            // function; this is what winit's `render_output` already uses
+            // internally, which is why this backend didn't show the bug) builds the
+            // same element list but positions layers via `layer_geometry` correctly.
+            match space_render_elements(&mut renderer, [&alice.space], &output, 1.0) {
+                Ok(elements) => elements,
+                Err(err) => {
+                    eprintln!("Failed to gather render elements for {:?}: {:?}", output.name(), err);
+                    return;
+                }
             }
         };
 
@@ -769,6 +790,57 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     alice.space.refresh();
     alice.popups.cleanup();
     let _ = alice.display_handle.flush_clients();
+}
+
+fn fullscreen_output_elements<'a>(
+    renderer: &mut UdevRenderer<'a>,
+    space: &Space<Window>,
+    output: &Output,
+    fs_window: &Window,
+    scale: f64,
+) -> Result<Vec<UdevRenderElement<'a>>, OutputNoMode> {
+    let scale: smithay::utils::Scale<f64> = smithay::utils::Scale::from(scale);
+    let mut elements = Vec::new();
+    let layer_map = layer_map_for_output(output);
+
+    // 1. Overlay stays on top even over the fullscreen window
+    for layer in layer_map.layers_on(Layer::Overlay) {
+        let Some(geo) = layer_map.layer_geometry(layer) else { continue };
+        elements.extend(layer.render_elements(
+            renderer,
+            geo.loc.to_physical_precise_round(scale),
+            scale,
+            1.0,
+        ));
+    }
+
+    // 2. The fullscreen window takes the place of `top` + normal windows.
+    //    Its location should just be the output's origin, since it's sized
+    //    to fill the whole output.
+    elements.extend(fs_window.render_elements(
+        renderer,
+        (0, 0).into(),
+        scale,
+        1.0,
+    ));
+    // NB: deliberately no Layer::Top pass here — that's what hides the bar.
+
+    // 3. Bottom / background stay under it (mostly irrelevant since the
+    //    fullscreen window is opaque and covers the whole output, but keeps
+    //    behavior consistent, e.g. during resize/transition frames).
+    for layer_kind in [Layer::Bottom, Layer::Background] {
+        for layer in layer_map.layers_on(layer_kind) {
+            let Some(geo) = layer_map.layer_geometry(layer) else { continue };
+            elements.extend(layer.render_elements(
+                renderer,
+                geo.loc.to_physical_precise_round(scale),
+                scale,
+                1.0,
+            ));
+        }
+    }
+
+    Ok(elements)
 }
 
 impl DmabufHandler for Alice<UdevData> {

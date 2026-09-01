@@ -438,7 +438,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let (floating, windows): (Vec<WindowId>, Vec<WindowId>) = self.window_registry.filter(&scope)
             .partition(|id| self.window_registry.get(id).map(|w| w.floating).unwrap_or(false));
 
-        if self.try_full_screen(area, &windows) {
+        if self.try_full_screen(&output.output, &windows) {
             for id in &floating {
                 self.apply_floating(*id, area);
             }
@@ -537,7 +537,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         }
     }
 
-    fn try_full_screen(&mut self, area: Rect, windows: &[WindowId]) -> bool {
+    fn try_full_screen(&mut self, output: &Output, windows: &[WindowId]) -> bool {
         let mut first_fullscreen = None;
 
         for id in windows.iter().rev() {
@@ -552,6 +552,17 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         let Some(window) = first_fullscreen else {
             return false;
+        };
+
+        let Some(area) = self.space.output_geometry(output) else {
+            return false;
+        };
+
+        let area = Rect {
+            x: area.loc.x,
+            y: area.loc.y,
+            width: area.size.w,
+            height: area.size.h,
         };
 
         for id in windows {
@@ -1183,6 +1194,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             self.done_autostart = true;
         }
     }
+
 }
 
 /// Returns 0 if the two 1D ranges `[a0, a0+al)` and `[b0, b0+bl)` overlap,
