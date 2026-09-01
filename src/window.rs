@@ -292,7 +292,7 @@ impl WindowRegistry {
     pub fn fullscreen_window_for_output(&self, scope: &LayoutScope) -> Option<Window> {
         let iter = self.filter(&scope);
         for id in iter {
-            if let Some(window) = self.get(&id) {
+            if let Some(window) = self.get(&id) && window.fullscreen {
                 return Some(window.window.clone());
             }
         }
