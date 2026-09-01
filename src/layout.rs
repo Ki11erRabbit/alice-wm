@@ -56,13 +56,8 @@ impl Layout for MasterStack {
         let mut stack = vec![stack_rect; windows.len() - 1];
 
         for i in 1..stack.len() {
-            stack[i].y = stack[i - 1].y + stack[i - 1].height;
-            if stack.len() > 1 {
-                stack[i].height = stack[i].height.saturating_sub(gap_size);
-            }
-            if i != 1 {
-                stack[i].y += gap_size;
-            }
+            stack[i].y = stack[i - 1].y + stack[i - 1].height + gap_size
+            stack[i].height = stack[i].height.saturating_sub(gap_size);
         }
         out.extend(stack);
 
