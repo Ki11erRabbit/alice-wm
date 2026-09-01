@@ -447,7 +447,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         }
 
         let layout = self.layout_registry.get_layout(&scope);
-        let rects = layout.arrange(area, &windows);
+        let rects = layout.arrange(area, &windows, self.config.gap_size());
         //,eprintln!("relayout_single: area={:?} windows={} rects={:?}", area, windows.len(), rects);
 
         for (id, rect) in windows.iter().zip(rects) {
