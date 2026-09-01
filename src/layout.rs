@@ -57,9 +57,11 @@ impl Layout for MasterStack {
 
         for i in 1..stack.len() {
             stack[i].y = stack[i - 1].y + stack[i - 1].height;
+            if stack.len() > 1 {
+                stack[i].height = stack[i].height.saturating_sub(gap_size);
+            }
             if i != 1 {
                 stack[i].y += gap_size;
-                stack[i].height = stack[i].height.saturating_sub(gap_size);
             }
         }
         out.extend(stack);
