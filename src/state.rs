@@ -534,8 +534,8 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         Rect {
             x: zone.loc.x + output_loc.x + gap_size,
             y: zone.loc.y + output_loc.y + gap_size,
-            width: zone.size.w - gap_size,
-            height: zone.size.h - gap_size,
+            width: zone.size.w - gap_size * 2,
+            height: zone.size.h - gap_size * 2,
         }
     }
 
