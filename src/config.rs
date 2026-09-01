@@ -210,6 +210,7 @@ pub struct Config {
     output_positions: HashMap<String, OutputPosition>,
     auto_start: Vec<String>,
     keyboard_layout: KeyboardLayout,
+    gap_size: i32,
 }
 
 impl Config {
@@ -219,6 +220,7 @@ impl Config {
             output_positions: HashMap::new(),
             auto_start: Vec::new(),
             keyboard_layout: KeyboardLayout::default(),
+            gap_size: 0,
         }
     }
 
@@ -255,6 +257,10 @@ impl Config {
 
     pub fn set_keyboard_layout(&mut self, layout: KeyboardLayout) {
         self.keyboard_layout = layout;
+    }
+
+    pub fn gap_size(&self) -> i32 {
+        self.gap_size
     }
 }
 
@@ -439,6 +445,7 @@ impl Default for Config {
             output_positions: HashMap::new(),
             auto_start: Vec::new(),
             keyboard_layout: KeyboardLayout::default(),
+            gap_size: 0,
         }
     }
 }
@@ -618,6 +625,18 @@ fn load_config(use_alt: bool, file_text: &str) -> mlua::Result<Config> {
         let config = config_clone.clone();
         let mut guard = config.borrow_mut();
         guard.auto_start.push(command);
+        Ok(())
+    })?)?;
+
+    let config_clone = config.clone();
+
+    lua.globals().set("gap_size", lua.create_function_mut(move |_, gaps: i64| {
+        let config = config_clone.clone();
+        let mut guard = config.borrow_mut();
+        if gaps < 0 {
+            return Err(mlua::Error::runtime("Gap size cannot be less than zero"));
+        }
+        guard.gap_size = gaps as i32;
         Ok(())
     })?)?;
 

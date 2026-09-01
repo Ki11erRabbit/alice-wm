@@ -529,11 +529,13 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             .map(|geo| geo.loc)
             .unwrap_or_default();
 
+        let gap_size = self.config.gap_size();
+
         Rect {
-            x: zone.loc.x + output_loc.x,
-            y: zone.loc.y + output_loc.y,
-            width: zone.size.w,
-            height: zone.size.h,
+            x: zone.loc.x + output_loc.x + gap_size,
+            y: zone.loc.y + output_loc.y + gap_size,
+            width: zone.size.w - gap_size,
+            height: zone.size.h - gap_size,
         }
     }
 
