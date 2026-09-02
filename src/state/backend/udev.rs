@@ -411,17 +411,33 @@ impl Backend for UdevData {
 
         // --- render into an offscreen target ---
         //
-        // `GlesTexture` — not a "Multi"-prefixed type. The compiler's error
-        // showed `GlesRenderer` (the concrete backend `MultiRenderer` wraps
-        // here) implementing `Offscreen<GlesTexture>` and
-        // `Offscreen<GlesRenderbuffer>` directly; `MultiRenderer` forwards
-        // through to whichever of those the inner renderer supports, rather
-        // than defining its own separate offscreen target type. Also:
-        // `bind()`'s real signature is `fn bind<'a>(&mut self, target: &'a
-        // mut Target) -> ...` — it takes `&mut Target`, not an owned
-        // `Target`, hence `target` needs to be `mut` and passed as
+        // Using `GlesRenderbuffer` here instead of `GlesTexture` (both are
+        // real options — `GlesRenderer` implements `Offscreen` for either,
+        // and `MultiRenderer` forwards through to whichever the inner
+        // renderer supports). Symptoms reported for this backend — mangled
+        // captures independent of region size/position, real desktop
+        // rendering unaffected — point at the offscreen-texture-FBO
+        // render-then-immediate-readback path specifically, rather than
+        // anything in this function's own coordinate math (which doesn't
+        // change between the two target kinds). That pattern (render to a
+        // texture attachment, then read it back the same frame with no
+        // intervening presentation) is far less exercised than the
+        // render-to-window/render-to-swapchain path real scanout uses, and
+        // is a known-troublesome spot for tile-based GPU drivers, which
+        // this hardware's Apple GPU is — a missing/incomplete tile
+        // store-to-memory step for a texture-attached FBO would show up as
+        // exactly this: garbage/torn content, at any size, that never
+        // touches the real display. A renderbuffer attachment goes through
+        // a different internal path in most GLES drivers and sidesteps
+        // that specific gap if that's what this is; if the readback is
+        // still garbled with this change, that rules the theory out rather
+        // than confirms it, which narrows things down either way.
+        //
+        // Also: `bind()`'s real signature is `fn bind<'a>(&mut self,
+        // target: &'a mut Target) -> ...` — it takes `&mut Target`, not an
+        // owned `Target`, hence `target` needs to be `mut` and passed as
         // `&mut target` below.
-        let mut target: smithay::backend::renderer::gles::GlesTexture = renderer
+        let mut target: smithay::backend::renderer::gles::GlesRenderbuffer = renderer
             .create_buffer(Fourcc::Argb8888, capture_size_buf)
             .map_err(|e| format!("failed to create offscreen buffer: {e}"))?;
 
