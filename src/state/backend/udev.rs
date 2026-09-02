@@ -409,19 +409,35 @@ impl Backend for UdevData {
             elements.splice(0..0, cursor_elements.into_iter().map(UdevFrameRenderElement::Cursor));
         }
 
-        // Capture rectangle. This backend actually deals in TWO differently
-        // "kinded" but numerically-identical sizes here — `render`/`clear`/
-        // element `draw` want `Physical`-kind, while `create_buffer` and
+        // This backend actually deals in TWO differently "kinded" but
+        // numerically-identical sizes here — `render`/`clear`/element
+        // `draw` want `Physical`-kind, while `create_buffer` and
         // `copy_framebuffer` want `Buffer`-kind (confirmed against this
         // Smithay version's real signatures via the compiler, not guessed).
         // These kinds are phantom types Smithay uses to stop coordinate
         // spaces from being mixed up by accident; since no buffer scaling
         // is applied here, the numeric values are the same either way — we
         // just need both differently-typed handles to satisfy each call.
+        //
+        // `full_size` is always the output's real, untransformed mode size
+        // (matching `OutputModeSource::Auto`'s own resolution, i.e. exactly
+        // what the working scanout path renders into) — NOT the requested
+        // crop. Rendering a pre-shifted, crop-sized canvas together with
+        // this output's *real* transform doesn't work: `render()`'s
+        // transform math needs the true full-output size to compute a
+        // correct rotation, so a rotated output (e.g. this one, configured
+        // at 270°) rendered into an undersized, pre-shifted canvas produces
+        // nonsense — elements can land somewhere that happens to overlap
+        // where a *different* output's content would be, which is exactly
+        // what "getting my other monitor's content, chopped up" looks like.
+        // So: always render the whole output, then crop by copying just
+        // the requested sub-rectangle out of the readback — the same
+        // approach `winit.rs`'s `copy_frame` already uses.
         let mode = output.current_mode().ok_or("output has no current mode")?;
-        let capture_size = region.map(|r| r.size).unwrap_or(mode.size);
-        let capture_size_buf: smithay::utils::Size<i32, smithay::utils::Buffer> =
-            (capture_size.w, capture_size.h).into();
+        let full_size = mode.size;
+        let full_size_buf: smithay::utils::Size<i32, smithay::utils::Buffer> =
+            (full_size.w, full_size.h).into();
+        let capture_size = region.map(|r| r.size).unwrap_or(full_size);
         let capture_loc: Point<i32, Physical> = region.map(|r| r.loc).unwrap_or((0, 0).into());
 
         // --- render into an offscreen target ---
@@ -436,26 +452,31 @@ impl Backend for UdevData {
         // takes `&mut Target`, not an owned `Target`, hence `target` needs
         // to be `mut` and passed as `&mut target` below.
         let mut target: smithay::backend::renderer::gles::GlesTexture = renderer
-            .create_buffer(Fourcc::Argb8888, capture_size_buf)
+            .create_buffer(Fourcc::Argb8888, full_size_buf)
             .map_err(|e| format!("failed to create offscreen buffer: {e}"))?;
 
         let mut fb = renderer
             .bind(&mut target)
             .map_err(|e| format!("failed to bind offscreen target: {e}"))?;
 
+        // The output's *real* transform, not a hardcoded `Transform::Normal`
+        // — this was previously ignoring any configured rotation entirely,
+        // which is the other half of the bug described above.
         let mut frame = renderer
-            .render(&mut fb, capture_size, Transform::Normal)
+            .render(&mut fb, full_size, output.current_transform())
             .map_err(|e| format!("failed to start frame: {e}"))?;
         frame
-            .clear([0.0, 0.0, 0.0, 1.0].into(), &[Rectangle::from_size(capture_size)])
+            .clear([0.0, 0.0, 0.0, 1.0].into(), &[Rectangle::from_size(full_size)])
             .map_err(|e| format!("failed to clear frame: {e}"))?;
 
         // Elements are gathered top-most-first (cursor first, then space
-        // elements); draw back-to-front, so iterate in reverse.
+        // elements); draw back-to-front, so iterate in reverse. No crop
+        // shift here — elements are drawn at their true output-local
+        // position, matching the full-size canvas above; cropping happens
+        // after readback instead (see below).
         for element in elements.iter().rev() {
             let src = element.src();
-            let mut dst = element.geometry(output_scale);
-            dst.loc -= capture_loc; // shift so a cropped region lands at (0, 0)
+            let dst = element.geometry(output_scale);
             let damage = [Rectangle::from_size(dst.size)];
             if let Err(err) = element.draw(&mut frame, src, dst, &damage, &[]) {
                 eprintln!("screencopy: failed to draw element for {:?}: {:?}", output.name(), err);
@@ -481,9 +502,9 @@ impl Backend for UdevData {
             .map_err(|e| format!("failed waiting for GPU render to finish before readback: {e}"))?;
 
 
-        // --- read back and copy into the client's shm buffer ---
+        // --- read back the full output, then crop into the client's shm buffer ---
         let mapping = renderer
-            .copy_framebuffer(&fb, Rectangle::from_size(capture_size_buf), Fourcc::Argb8888)
+            .copy_framebuffer(&fb, Rectangle::from_size(full_size_buf), Fourcc::Argb8888)
             .map_err(|e| format!("failed to read back framebuffer: {e}"))?;
         let pixels = renderer
             .map_texture(&mapping)
@@ -491,14 +512,16 @@ impl Backend for UdevData {
 
         with_buffer_contents_mut(buffer, |ptr, _len, data| {
             let dst_stride = data.stride as usize;
-            let src_stride = capture_size.w as usize * 4;
-            let copy_len = src_stride.min(dst_stride);
+            let full_stride = full_size.w as usize * 4;
+            let row_bytes = (capture_size.w as usize * 4).min(dst_stride);
+            let x_offset_bytes = capture_loc.x as usize * 4;
             for row in 0..capture_size.h as usize {
+                let src_offset = (capture_loc.y as usize + row) * full_stride + x_offset_bytes;
                 unsafe {
                     std::ptr::copy_nonoverlapping(
-                        pixels.as_ptr().add(row * src_stride),
+                        pixels.as_ptr().add(src_offset),
                         ptr.add(row * dst_stride),
-                        copy_len,
+                        row_bytes,
                     );
                 }
             }
