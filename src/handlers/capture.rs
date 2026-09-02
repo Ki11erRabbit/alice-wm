@@ -100,21 +100,35 @@ where
                     return;
                 };
 
-                // Per protocol, x/y/width/height are in the same coordinate
-                // space as the output — but they're client-supplied and
-                // arrive completely unchecked (a slurp selection dragged a
-                // pixel past an edge, a fullscreen-region tool rounding
-                // differently than we do, or just a buggy/hostile client).
-                // Clamp against the output's real geometry before this ever
-                // reaches a backend: both `copy_frame` impls trust `region`
-                // outright, and the winit one indexes its source
-                // framebuffer directly with it — an out-of-bounds rectangle
-                // there reads past the end of that buffer (UB, seen as a
-                // corrupted/garbage capture) rather than erroring.
-                let requested = Rectangle {
+                // Per the wlr-screencopy protocol spec, x/y/width/height
+                // are given in *output logical coordinates* (see
+                // xdg_output.logical_size) — not physical/buffer pixels.
+                // On a 1x output those are numerically identical, which is
+                // presumably how this went unnoticed, but on any scaled
+                // output (2x HiDPI here) treating them as physical directly
+                // would put the region at up to half the requested
+                // position/size. Build it as `Logical` first and convert
+                // properly using the output's real scale before it's used
+                // as `Physical` anywhere downstream (both backends'
+                // `copy_frame` — and the clamping right below — assume
+                // `region` is already physical).
+                let requested_logical: Rectangle<i32, smithay::utils::Logical> = Rectangle {
                     loc: (x, y).into(),
                     size: (width.max(0), height.max(0)).into(),
                 };
+                let output_scale = output.current_scale().fractional_scale();
+                let requested = requested_logical.to_physical_precise_round(output_scale);
+
+                // Client-supplied and arriving completely unchecked (a
+                // slurp selection dragged a pixel past an edge, a
+                // fullscreen-region tool rounding differently than we do,
+                // or just a buggy/hostile client). Clamp against the
+                // output's real geometry before this ever reaches a
+                // backend: both `copy_frame` impls trust `region` outright,
+                // and the winit one indexes its source framebuffer
+                // directly with it — an out-of-bounds rectangle there reads
+                // past the end of that buffer (UB, seen as a
+                // corrupted/garbage capture) rather than erroring.
                 let (out_w, out_h) = state.backend_data.output_physical_size(&output);
                 let output_rect: Rectangle<i32, Physical> = Rectangle::from_size((out_w, out_h).into());
 

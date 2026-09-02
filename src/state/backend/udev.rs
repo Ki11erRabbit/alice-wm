@@ -372,12 +372,27 @@ impl Backend for UdevData {
         let mut elements: Vec<UdevFrameRenderElement<'_>> =
             space_elements.into_iter().map(UdevFrameRenderElement::Space).collect();
 
+        // The real output scale (Apple Silicon panels commonly run at 2x
+        // HiDPI) — needed both for the cursor overlay below and, more
+        // importantly, for querying each element's geometry further down.
+        // `RenderElement::geometry(scale)` uses this `scale` to convert an
+        // element's *size* from logical to physical pixels, while its
+        // *position* is already stored pre-converted to physical pixels at
+        // the real output scale (baked in when `space_render_elements`
+        // built these elements). Querying geometry with the wrong scale
+        // therefore doesn't move or corrupt anything — it desyncs size
+        // from position: elements land at their correct on-screen
+        // location but sized as if the display were 1x, so on a 2x output
+        // everything draws at a quarter of its real area, all bunched
+        // toward each element's top-left corner. That reads exactly like
+        // "windows moved for the draw."
+        let output_scale = smithay::utils::Scale::from(output.current_scale().fractional_scale());
+
         if overlay_cursor {
             let output_geo = alice
                 .space
                 .output_geometry(output)
                 .ok_or("output has no geometry in space")?;
-            let output_scale = smithay::utils::Scale::from(output.current_scale().fractional_scale());
             let cursor_pos = alice
                 .seat
                 .get_pointer()
@@ -411,33 +426,16 @@ impl Backend for UdevData {
 
         // --- render into an offscreen target ---
         //
-        // Using `GlesRenderbuffer` here instead of `GlesTexture` (both are
-        // real options — `GlesRenderer` implements `Offscreen` for either,
-        // and `MultiRenderer` forwards through to whichever the inner
-        // renderer supports). Symptoms reported for this backend — mangled
-        // captures independent of region size/position, real desktop
-        // rendering unaffected — point at the offscreen-texture-FBO
-        // render-then-immediate-readback path specifically, rather than
-        // anything in this function's own coordinate math (which doesn't
-        // change between the two target kinds). That pattern (render to a
-        // texture attachment, then read it back the same frame with no
-        // intervening presentation) is far less exercised than the
-        // render-to-window/render-to-swapchain path real scanout uses, and
-        // is a known-troublesome spot for tile-based GPU drivers, which
-        // this hardware's Apple GPU is — a missing/incomplete tile
-        // store-to-memory step for a texture-attached FBO would show up as
-        // exactly this: garbage/torn content, at any size, that never
-        // touches the real display. A renderbuffer attachment goes through
-        // a different internal path in most GLES drivers and sidesteps
-        // that specific gap if that's what this is; if the readback is
-        // still garbled with this change, that rules the theory out rather
-        // than confirms it, which narrows things down either way.
-        //
-        // Also: `bind()`'s real signature is `fn bind<'a>(&mut self,
-        // target: &'a mut Target) -> ...` — it takes `&mut Target`, not an
-        // owned `Target`, hence `target` needs to be `mut` and passed as
-        // `&mut target` below.
-        let mut target: smithay::backend::renderer::gles::GlesRenderbuffer = renderer
+        // `GlesTexture` — not a "Multi"-prefixed type. `GlesRenderer` (the
+        // concrete backend `MultiRenderer` wraps here) implements
+        // `Offscreen<GlesTexture>` and `Offscreen<GlesRenderbuffer>`
+        // directly; `MultiRenderer` forwards through to whichever of those
+        // the inner renderer supports, rather than defining its own
+        // separate offscreen target type. Also: `bind()`'s real signature
+        // is `fn bind<'a>(&mut self, target: &'a mut Target) -> ...` — it
+        // takes `&mut Target`, not an owned `Target`, hence `target` needs
+        // to be `mut` and passed as `&mut target` below.
+        let mut target: smithay::backend::renderer::gles::GlesTexture = renderer
             .create_buffer(Fourcc::Argb8888, capture_size_buf)
             .map_err(|e| format!("failed to create offscreen buffer: {e}"))?;
 
@@ -456,7 +454,7 @@ impl Backend for UdevData {
         // elements); draw back-to-front, so iterate in reverse.
         for element in elements.iter().rev() {
             let src = element.src();
-            let mut dst = element.geometry(smithay::utils::Scale::from(1.0));
+            let mut dst = element.geometry(output_scale);
             dst.loc -= capture_loc; // shift so a cropped region lands at (0, 0)
             let damage = [Rectangle::from_size(dst.size)];
             if let Err(err) = element.draw(&mut frame, src, dst, &damage, &[]) {
