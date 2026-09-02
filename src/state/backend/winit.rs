@@ -89,6 +89,15 @@ impl Backend for WinitData {
         let position = alice.config.get_output_position(&output.name())
             .map(|pos| (pos.x, pos.y))
             .unwrap_or((0, 0));
+        // `change_current_state`'s location arg above was hardcoded to
+        // (0, 0) since `alice.config` doesn't exist yet at that point in
+        // this function. Passing `None` for the other three arguments here
+        // leaves mode/transform/scale untouched (each is independently a
+        // no-op when `None`) and only updates location — keeping
+        // `Output`'s own state, and therefore xdg-output, in sync with
+        // wherever `Space` is about to place it below. See the longer
+        // explanation of why this matters in udev.rs's `connector_connected`.
+        output.change_current_state(None, None, None, Some(position.into()));
         alice.space.map_output(&output, position);
         alice.outputs.insert(output.clone());
         output.create_global::<Alice<Self>>(&display_handle);

@@ -709,14 +709,8 @@ fn connector_connected(
     let transform = output_cfg.map(|cfg| cfg.transform).unwrap_or(Transform::Normal);
     let scale = output_cfg.and_then(|cfg| cfg.scale).map(Scale::Fractional);
 
-    output.change_current_state(
-        Some(WlMode { size: (w as i32, h as i32).into(), refresh }),
-        Some(transform),
-        scale,
-        None,
-    );
-    output.set_preferred(WlMode { size: (w as i32, h as i32).into(), refresh });
-
+    // Compute this before `change_current_state` (not after, as it was) —
+    // see the location argument below.
     let position = match output_cfg {
         Some(cfg) => (cfg.x, cfg.y),
         None => {
@@ -729,6 +723,34 @@ fn connector_connected(
             (x_offset, 0)
         }
     };
+
+    // The 4th argument here is `new_location: Option<Point<i32, Logical>>`.
+    // This was previously always `None` — which doesn't mean "leave it
+    // unset", it means "don't touch `Output`'s own location field (and
+    // don't tell xdg-output listeners it changed) at all". `Space` tracks
+    // each output's position completely separately from the `Output`
+    // object itself: `space.map_output()` below only updates `Space`'s own
+    // internal bookkeeping (what `space.output_geometry()` reads, which is
+    // what real rendering/hit-testing/window placement all correctly use —
+    // why multi-monitor otherwise looks fine). It does NOT touch
+    // `Output`'s own `location` field, which is the only thing xdg-output's
+    // `logical_position` event is ever derived from. With every output
+    // stuck reporting (0, 0) here, any client that lays out multiple
+    // monitors from xdg-output geometry — slurp drawing its selection
+    // overlay, grim converting a selected global-space rectangle into an
+    // output-relative one for `CaptureOutputRegion` — sees every monitor
+    // as occupying the same (0, 0) origin. That's the selection overlay
+    // "showing up on every monitor" and captures landing on the wrong
+    // output entirely. Passing the real position here keeps `Output`'s own
+    // state (and therefore xdg-output) in sync with where `Space` actually
+    // places it.
+    output.change_current_state(
+        Some(WlMode { size: (w as i32, h as i32).into(), refresh }),
+        Some(transform),
+        scale,
+        Some(position.into()),
+    );
+    output.set_preferred(WlMode { size: (w as i32, h as i32).into(), refresh });
 
     alice.space.map_output(&output, position);
     output.create_global::<Alice<UdevData>>(&alice.display_handle);
