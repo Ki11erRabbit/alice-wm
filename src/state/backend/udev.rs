@@ -27,6 +27,7 @@ use smithay::{
         drm::control::{ModeTypeFlags, connector, crtc},
         input::Libinput,
         rustix::fs::OFlags,
+        wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
         wayland_server::{Display, backend::GlobalId, protocol::wl_buffer::WlBuffer},
     },
     // NB: deliberately NOT importing `smithay::utils::Scale` here — `Scale`
@@ -188,14 +189,15 @@ impl Backend for UdevData {
             .create_global_with_default_feedback::<Alice<UdevData>>(&display_handle, &default_feedback);
         alice.backend_data.dmabuf_state = Some((dmabuf_state, global));
 
-        // TODO(screencopy): once `Alice<UdevData>` implements
-        // `GlobalDispatch<ZwlrScreencopyManagerV1, ()>` (the dispatch code
-        // you're adding separately), register the global here:
-        //
-        //   use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
-        //   let screencopy_global = display_handle
-        //       .create_global::<Alice<UdevData>, ZwlrScreencopyManagerV1, _>(3, ());
-        //   alice.backend_data.screencopy_global = Some(screencopy_global);
+        // Registers `zwlr_screencopy_manager_v1` so grim/grimshot/OBS-via-
+        // xdg-desktop-portal-wlr can find it. Hardcoded version `3` here to
+        // match the constant of the same value in the dispatch module —
+        // swap this for an import of that constant (e.g.
+        // `crate::handlers::screencopy::SCREENCOPY_VERSION`) if you'd
+        // rather not have the magic number duplicated across udev.rs and
+        // winit.rs.
+        let screencopy_global = display_handle.create_global::<Alice<UdevData>, ZwlrScreencopyManagerV1, _>(3, ());
+        alice.backend_data.screencopy_global = Some(screencopy_global);
 
         let udev_handle = handle.clone();
         event_loop.handle().insert_source(udev_backend, move |event, _, data| {
@@ -280,10 +282,14 @@ impl Backend for UdevData {
     fn reset_buffers(&mut self, _output: &Output) {}
     fn early_import(&mut self, _surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {}
     fn update_led_state(&mut self, led_state: smithay::input::keyboard::LedState) {
-        for keyboard in self.keyboards.iter_mut() {
-            keyboard.led_update(led_state.into());
+        // Mirrors the DeviceAdded handler in setup() below, which does the
+        // same `device.led_update(led_state.into())` call for a single
+        // newly-plugged-in keyboard. This does it for every keyboard
+        // already being tracked, whenever the compositor's LED state
+        // itself changes (e.g. caps lock toggled).
+        for device in &mut self.keyboards {
+            device.led_update(led_state.into());
         }
-
     }
 
     fn schedule_render(alice: &mut Alice<Self>) {
