@@ -462,8 +462,21 @@ impl Backend for UdevData {
         // The output's *real* transform, not a hardcoded `Transform::Normal`
         // — this was previously ignoring any configured rotation entirely,
         // which is the other half of the bug described above.
+        // NOTE: `output.current_transform().invert()`, not the raw value.
+        // Real scanout (`DrmCompositor`, working correctly — this is only
+        // about the screenshot) evidently doesn't feed this stored value
+        // straight into a `render()` call the way this function does; it
+        // likely goes through a hardware plane rotation property or some
+        // other internal path with its own direction convention. Using the
+        // raw transform here produced an exact 180° mismatch on this
+        // rotated output (upside-down, nothing else wrong) — and
+        // `Transform::_270.invert() == Transform::_90`, exactly 180° apart,
+        // which is why `.invert()` corrects it. `Transform::Normal` and
+        // `Transform::_180` are their own inverses, so this is also a
+        // no-op for every non-rotated output — it shouldn't be able to
+        // regress the center monitor.
         let mut frame = renderer
-            .render(&mut fb, full_size, output.current_transform())
+            .render(&mut fb, full_size, output.current_transform().invert())
             .map_err(|e| format!("failed to start frame: {e}"))?;
         frame
             .clear([0.0, 0.0, 0.0, 1.0].into(), &[Rectangle::from_size(full_size)])
