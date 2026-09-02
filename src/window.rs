@@ -210,14 +210,12 @@ impl WindowRegistry {
             if let Some(toplevel) = info.window.toplevel() {
                 self.surface_index.remove(&toplevel.wl_surface().id());
             }
-            let Some(layout) = self.order.get_mut(&LayoutScope {
+            if let Some(layout) = self.order.get_mut(&LayoutScope {
                 output: info.output,
                 tag: info.tag,
-            }) else {
-                return
-            };
-
-            layout.remove_window(id);
+            }) {
+                layout.remove_window(id);
+            }
         }
         if self.focused_window == Some(id) {
             self.focused_window = None;

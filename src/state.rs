@@ -757,9 +757,13 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
     }
 
     pub fn remove_window(&mut self, surface: &WlSurface) {
-        let Some((id, window)) = self.get_window(surface) else {
+        let Some(id) = self.window_registry.find_by_surface(surface) else {
             return;
         };
+        let Some(window) = self.window_registry.get(&id) else {
+            return
+        };
+        let window = window.window.clone();
 
         let was_focused = self.window_registry.focused_window() == Some(id);
         let scope_info = self.window_registry.get(&id).map(|i| (i.output, i.tag));
