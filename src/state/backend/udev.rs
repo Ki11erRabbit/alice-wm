@@ -447,10 +447,25 @@ impl Backend for UdevData {
                 eprintln!("screencopy: failed to draw element for {:?}: {:?}", output.name(), err);
             }
         }
-        let _sync_point = frame.finish().map_err(|e| format!("failed to finish frame: {e}"))?;
-        // _sync_point.wait(); // uncomment if readback below ever shows
-        // torn/stale content — some versions require an explicit wait
-        // before the framebuffer is readback-safe.
+
+        // `Frame::finish()` returns a `SyncPoint`, not a completed render.
+        // On any driver with EGL fence support (i.e. basically every real
+        // GBM/DRM setup, which is exactly this backend) `finish_internal`
+        // only calls `glFlush()` and hands back an *unsignaled* fence —
+        // GPU work is submitted, not necessarily done. Smithay marks the
+        // return type `#[must_use = "... failing to [wait] may result in
+        // unexpected rendering artifacts"]` for exactly this reason. The
+        // previous code bound it to `_sync_point` (silencing that lint)
+        // and never waited, so `copy_framebuffer`/`map_texture` below could
+        // read the target texture while the GPU was still mid-draw —
+        // a race that shows up as a garbled/incomplete screenshot,
+        // independent of what region was requested or where on the output
+        // it was. Waiting here blocks until the fence actually signals.
+        let sync_point = frame.finish().map_err(|e| format!("failed to finish frame: {e}"))?;
+        sync_point
+            .wait()
+            .map_err(|e| format!("failed waiting for GPU render to finish before readback: {e}"))?;
+
 
         // --- read back and copy into the client's shm buffer ---
         let mapping = renderer

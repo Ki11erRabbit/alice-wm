@@ -329,9 +329,30 @@ impl Backend for WinitData {
         // call) rather than reusing `alice.backend_data.damage_tracker` —
         // that one tracks the real swapchain's frame-to-frame damage, and
         // feeding it an unrelated offscreen render would desync its aging.
-        let mut scratch_damage_tracker = OutputDamageTracker::from_output(output);
+        //
+        // Deliberately NOT `OutputDamageTracker::from_output(output)`: that
+        // ties the tracker to the output's *live* transform, which for this
+        // backend is `Transform::Flipped180` (set in `setup()` above to
+        // correct winit's own vertically-flipped GL framebuffer for the
+        // real on-screen presentation). `render_output` below bakes
+        // whatever transform the tracker reports into the pixels it
+        // produces — so reusing the output's transform here would flip this
+        // offscreen capture too, and the row-copy below (which assumes a
+        // normal, top-down readback) would then crop the wrong rows out of
+        // a vertically-mirrored image: full-screen captures come out upside
+        // down, and region captures land on the vertically-mirrored
+        // counterpart of the area the client actually asked for. Element
+        // positions from `space_render_elements` are already
+        // transform-independent (only `output.current_scale()` factors
+        // in), so forcing `Transform::Normal` here — size and scale
+        // otherwise unchanged — decouples this readback from that
+        // presentation-only hack. This is the same reason udev.rs's
+        // `copy_frame` hardcodes `Transform::Normal` instead of reading it
+        // off the output.
+        let mut scratch_damage_tracker =
+            OutputDamageTracker::new(full_size, 1.0, Transform::Normal);
 
-        smithay::desktop::space::render_output::<
+        let render_result = smithay::desktop::space::render_output::<
             _,
             crate::cursor::PointerRenderElement<GlesRenderer>,
             _,
@@ -348,6 +369,15 @@ impl Backend for WinitData {
             [0.0, 0.0, 0.0, 1.0],
         )
         .map_err(|e| format!("failed to render offscreen: {e:?}"))?;
+
+        // Same fence-not-waited race as udev.rs's `copy_frame`: `render_output`'s
+        // `RenderOutputResult::sync` may be an unsignaled EGL fence rather than
+        // a completed render (see the comment there for details). Wait before
+        // reading the framebuffer back, or the capture can come back garbled.
+        render_result
+            .sync
+            .wait()
+            .map_err(|e| format!("failed waiting for GPU render to finish before readback: {e}"))?;
 
         let mapping = renderer
             .copy_framebuffer(&fb, Rectangle::from_size(full_size_buf), Fourcc::Argb8888)

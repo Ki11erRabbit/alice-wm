@@ -99,17 +99,37 @@ where
                 let Some(output) = Output::from_resource(&output) else {
                     return;
                 };
+
                 // Per protocol, x/y/width/height are in the same coordinate
-                // space as the output. NOTE: not validated/clamped against
-                // the output's actual geometry here — a malicious or buggy
-                // client could request an out-of-bounds region. Worth
-                // adding a bounds check against `output.current_mode()`
-                // before shipping this.
-                let region = Rectangle {
+                // space as the output — but they're client-supplied and
+                // arrive completely unchecked (a slurp selection dragged a
+                // pixel past an edge, a fullscreen-region tool rounding
+                // differently than we do, or just a buggy/hostile client).
+                // Clamp against the output's real geometry before this ever
+                // reaches a backend: both `copy_frame` impls trust `region`
+                // outright, and the winit one indexes its source
+                // framebuffer directly with it — an out-of-bounds rectangle
+                // there reads past the end of that buffer (UB, seen as a
+                // corrupted/garbage capture) rather than erroring.
+                let requested = Rectangle {
                     loc: (x, y).into(),
                     size: (width.max(0), height.max(0)).into(),
                 };
-                init_frame(state, frame, data_init, output, overlay_cursor != 0, Some(region));
+                let (out_w, out_h) = state.backend_data.output_physical_size(&output);
+                let output_rect: Rectangle<i32, Physical> = Rectangle::from_size((out_w, out_h).into());
+
+                match requested.intersection(output_rect) {
+                    Some(region) if region.size.w > 0 && region.size.h > 0 => {
+                        init_frame(state, frame, data_init, output, overlay_cursor != 0, Some(region));
+                    }
+                    // Requested rectangle doesn't overlap the output at
+                    // all: still create the frame object (required so the
+                    // client can destroy it per the protocol's object
+                    // lifetime rules), but reject it immediately rather
+                    // than arming a `copy`/`copy_with_damage` that could
+                    // never produce a valid image.
+                    _ => init_failed_frame(frame, data_init, output),
+                }
             }
             zwlr_screencopy_manager_v1::Request::Destroy => {}
             _ => {}
@@ -146,6 +166,24 @@ fn init_frame<B>(
     if frame.version() >= 2 {
         frame.buffer_done();
     }
+}
+
+/// Creates the `ZwlrScreencopyFrameV1` object (required even on a request
+/// we're going to refuse — clients still need something to `destroy`) and
+/// immediately sends `failed()` instead of a `buffer`/`buffer_done` pair.
+/// `copied` starts `true` so a client that ignores `failed()` and calls
+/// `copy`/`copy_with_damage` anyway hits `handle_copy`'s existing
+/// already-copied guard and gets silently ignored rather than acted on.
+fn init_failed_frame<B>(
+    frame: New<ZwlrScreencopyFrameV1>,
+    data_init: &mut DataInit<'_, Alice<B>>,
+    output: Output,
+) where
+    B: Backend + 'static,
+{
+    let frame_data = FrameData { output, overlay_cursor: false, region: None, copied: AtomicBool::new(true) };
+    let frame = data_init.init(frame, frame_data);
+    frame.failed();
 }
 
 // ---- Frame object ----
