@@ -1,10 +1,10 @@
 mod compositor;
 mod xdg_shell;
 mod wlr_shell;
+mod capture;
 
 use crate::Alice;
 use crate::state::backend::Backend;
-use crate::state::backend::winit::WinitData;
 
 //
 // Wl Seat

@@ -11,7 +11,11 @@ use smithay::{
         input::InputEvent,
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
-            ImportDma, damage::OutputDamageTracker, element::{AsRenderElements, surface::WaylandSurfaceRenderElement}, gles::GlesRenderer, multigpu::{GpuManager, MultiRenderer, gbm::GbmGlesBackend}
+            Bind, ExportMem, Frame, ImportDma, Offscreen, Renderer,
+            damage::OutputDamageTracker,
+            element::{AsRenderElements, Element, RenderElement, surface::WaylandSurfaceRenderElement},
+            gles::GlesRenderer,
+            multigpu::{GpuManager, MultiRenderer, gbm::GbmGlesBackend},
         },
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{UdevBackend, UdevEvent, primary_gpu},
@@ -23,13 +27,22 @@ use smithay::{
         drm::control::{ModeTypeFlags, connector, crtc},
         input::Libinput,
         rustix::fs::OFlags,
-        wayland_server::Display,
+        wayland_server::{Display, backend::GlobalId, protocol::wl_buffer::WlBuffer},
     },
-    utils::{DeviceFd, Transform}, wayland::{dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier}, shell::wlr_layer::Layer},
+    // NB: deliberately NOT importing `smithay::utils::Scale` here — `Scale`
+    // above (from `smithay::output`) is a different type used for output
+    // scale factors. Rendering code below refers to the utils one via its
+    // full path (`smithay::utils::Scale::from(...)`) to avoid the collision.
+    utils::{DeviceFd, Physical, Point, Rectangle, Transform},
+    wayland::{
+        dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
+        shell::wlr_layer::Layer,
+        shm::with_buffer_contents_mut,
+    },
 };
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 
-use crate::{Alice, CalloopData, config::Config, output::LayoutScope, state::backend::Backend};
+use crate::{Alice, CalloopData, config::Config, output::{LayoutScope, Outputs}, state::backend::Backend};
 
 // ---------------------------------------------------------------------
 // Types
@@ -69,15 +82,6 @@ pub struct SurfaceData {
     pub drm_output: DrmOutput<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>,
     pub damage_tracker: OutputDamageTracker,
     pub output: Output,
-    /// True from the moment a frame is successfully handed to
-    /// `queue_frame` until the matching `DrmEvent::VBlank` fires and
-    /// `frame_finish` clears it. While a frame is in flight for this CRTC,
-    /// `schedule_render` must not render+queue again — page-flips are only
-    /// permitted once per retrace, and doing so anyway is what pegs the
-    /// compositor to however fast input/commit events arrive instead of the
-    /// output's actual refresh rate. `frame_finish` (driven by the real
-    /// vblank event) is what re-renders once this clears, so pacing follows
-    /// the display instead of the event source.
     pub frame_pending: bool,
 }
 
@@ -86,20 +90,20 @@ pub struct UdevData {
     pub primary_gpu: DrmNode,
     pub gpus: GpuManager<GbmGlesBackend<GlesRenderer, DrmDeviceFd>>,
     pub backends: HashMap<DrmNode, GpuBackendData>,
-    /// GBM devices for GPUs that can render but have no display outputs of
-    /// their own (e.g. Apple's AGX under Asahi). Display-only devices (e.g.
-    /// DCP) borrow from here instead of opening a second fd on the same GPU.
     pub render_gbm_devices: HashMap<DrmNode, GbmDevice<DrmDeviceFd>>,
     pub keyboards: Vec<smithay::reexports::input::Device>,
     pub dmabuf_state: Option<(DmabufState, DmabufGlobal)>,
     pub pointer_element: crate::cursor::PointerElement,
+    /// `None` until the screencopy global is registered. This can't happen
+    /// inside `UdevData`'s own construction (it needs a `DisplayHandle`,
+    /// which doesn't exist yet at that point) and, more importantly,
+    /// shouldn't happen until `Alice<UdevData>` actually implements
+    /// `GlobalDispatch<ZwlrScreencopyManagerV1, ()>` — see the TODO in
+    /// `setup()` below for where to wire it up once that dispatch code
+    /// exists.
+    pub screencopy_global: Option<GlobalId>,
 }
 
-/// A KMS-capable device whose `DrmDevice` is already open, but which is
-/// waiting on a render-capable GPU to become available before it can finish
-/// building its allocator/DrmOutputManager. Held onto rather than dropped and
-/// reopened, since reopening the same device path in quick succession can
-/// fail under libseat.
 struct PendingKmsDevice {
     node: DrmNode,
     fd: DrmDeviceFd,
@@ -146,6 +150,7 @@ impl Backend for UdevData {
             keyboards: Vec::with_capacity(1),
             dmabuf_state: None,
             pointer_element: crate::cursor::PointerElement::default(),
+            screencopy_global: None,
         };
 
         let display: Display<Alice<Self>> = Display::new()?;
@@ -154,10 +159,6 @@ impl Backend for UdevData {
 
         let handle = event_loop.handle();
 
-        // Single pass: open + classify every device exactly once. KMS
-        // devices that can't finish yet get held (not dropped) in
-        // `pending_kms`, then drained once every render-only GPU on the
-        // system has had a chance to register.
         let udev_backend = UdevBackend::new(&seat_name)?;
         let mut pending_kms: Vec<PendingKmsDevice> = Vec::new();
 
@@ -187,9 +188,15 @@ impl Backend for UdevData {
             .create_global_with_default_feedback::<Alice<UdevData>>(&display_handle, &default_feedback);
         alice.backend_data.dmabuf_state = Some((dmabuf_state, global));
 
-        // A LoopHandle is cheaply Clone — capture our own clone into the
-        // closure so it's usable for the lifetime of the callback without
-        // needing to re-derive it from anything at call time.
+        // TODO(screencopy): once `Alice<UdevData>` implements
+        // `GlobalDispatch<ZwlrScreencopyManagerV1, ()>` (the dispatch code
+        // you're adding separately), register the global here:
+        //
+        //   use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1;
+        //   let screencopy_global = display_handle
+        //       .create_global::<Alice<UdevData>, ZwlrScreencopyManagerV1, _>(3, ());
+        //   alice.backend_data.screencopy_global = Some(screencopy_global);
+
         let udev_handle = handle.clone();
         event_loop.handle().insert_source(udev_backend, move |event, _, data| {
             let mut pending_kms: Vec<PendingKmsDevice> = Vec::new();
@@ -267,28 +274,19 @@ impl Backend for UdevData {
                 }
             })?;
 
-        // WAYLAND_DISPLAY/XDG_CURRENT_DESKTOP are exported (to our own
-        // process env *and* the D-Bus/systemd activation environment) by
-        // Alice::new -> export_activation_environment, right after the
-        // socket is created above.
-
         Ok(CalloopData { state: alice, display_handle })
     }
 
     fn reset_buffers(&mut self, _output: &Output) {}
     fn early_import(&mut self, _surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {}
-    fn update_led_state(&mut self, _led_state: smithay::input::keyboard::LedState) {}
+    fn update_led_state(&mut self, led_state: smithay::input::keyboard::LedState) {
+        for keyboard in self.keyboards.iter_mut() {
+            keyboard.led_update(led_state.into());
+        }
+
+    }
 
     fn schedule_render(alice: &mut Alice<Self>) {
-        // Only kick off a render for CRTCs that are currently idle (no
-        // frame in flight). `schedule_render` is called very frequently
-        // (every pointer motion, every surface commit, ...) — far more
-        // often than any output's refresh rate — so rendering unconditionally
-        // here would submit frames as fast as events arrive rather than as
-        // fast as the display can show them. For a CRTC that already has a
-        // queued frame, we do nothing: `frame_finish` re-renders with
-        // whatever the latest state is as soon as that frame's vblank
-        // fires, so nothing is lost by waiting.
         let targets: Vec<(DrmNode, crtc::Handle)> = alice
             .backend_data
             .backends
@@ -308,14 +306,171 @@ impl Backend for UdevData {
     }
 
     fn make_config() -> Config {
-        let config = match crate::config::execute_lua_config(false) {
+        match crate::config::execute_lua_config(false) {
             Ok(config) => config,
             Err(err) => {
                 eprintln!("Error while loading config: {err}");
                 Config::default()
             }
-        };
-        config
+        }
+    }
+
+    fn screencopy_id(&mut self) -> GlobalId {
+        self.screencopy_global
+            .clone()
+            .expect("screencopy_id called before the screencopy global was registered")
+    }
+
+    fn output_physical_size(&self, output: &Output) -> (i32, i32) {
+        let mode = output.current_mode().expect("queried size of output with no current mode");
+        (mode.size.w, mode.size.h)
+    }
+
+    // NOTE: this deliberately does NOT take `&mut self` alongside `alice` —
+    // `self`/`backend_data` is a FIELD of `Alice<Self>`, not a sibling of
+    // it, so a caller could never legally hold `&mut self` and `&mut
+    // Alice<Self>` at once (they'd overlap). Same shape as
+    // `schedule_render` above: take `alice` alone, reach backend-owned
+    // state via `alice.backend_data` inside the body.
+    fn copy_frame(
+        alice: &mut crate::Alice<Self>,
+        output: &Output,
+        region: Option<Rectangle<i32, Physical>>,
+        overlay_cursor: bool,
+        buffer: &WlBuffer,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let &(node, _crtc) = output
+            .user_data()
+            .get::<(DrmNode, crtc::Handle)>()
+            .ok_or("output has no associated (DrmNode, crtc::Handle)")?;
+
+        let render_node = alice
+            .backend_data
+            .backends
+            .get(&node)
+            .and_then(|b| b.render_node)
+            .ok_or("no render node for this output's device")?;
+
+        let mut renderer = alice
+            .backend_data
+            .gpus
+            .single_renderer(&render_node)
+            .map_err(|e| format!("failed to acquire renderer: {e}"))?;
+
+        let scope = output_scope(&alice.outputs, output).ok_or("no LayoutScope for output")?;
+
+        let space_elements =
+            output_space_elements(&mut renderer, &alice.space, &alice.window_registry, output, scope)
+                .map_err(|e| format!("failed to gather render elements: {e:?}"))?;
+
+        let mut elements: Vec<UdevFrameRenderElement<'_>> =
+            space_elements.into_iter().map(UdevFrameRenderElement::Space).collect();
+
+        if overlay_cursor {
+            let output_geo = alice
+                .space
+                .output_geometry(output)
+                .ok_or("output has no geometry in space")?;
+            let output_scale = smithay::utils::Scale::from(output.current_scale().fractional_scale());
+            let cursor_pos = alice
+                .seat
+                .get_pointer()
+                .ok_or("seat has no pointer")?
+                .current_location()
+                - output_geo.loc.to_f64();
+            let cursor_elements = crate::cursor::cursor_render_elements(
+                &mut alice.backend_data.pointer_element,
+                &alice.cursor_status,
+                &mut renderer,
+                cursor_pos,
+                output_scale,
+            );
+            elements.splice(0..0, cursor_elements.into_iter().map(UdevFrameRenderElement::Cursor));
+        }
+
+        // Capture rectangle. This backend actually deals in TWO differently
+        // "kinded" but numerically-identical sizes here — `render`/`clear`/
+        // element `draw` want `Physical`-kind, while `create_buffer` and
+        // `copy_framebuffer` want `Buffer`-kind (confirmed against this
+        // Smithay version's real signatures via the compiler, not guessed).
+        // These kinds are phantom types Smithay uses to stop coordinate
+        // spaces from being mixed up by accident; since no buffer scaling
+        // is applied here, the numeric values are the same either way — we
+        // just need both differently-typed handles to satisfy each call.
+        let mode = output.current_mode().ok_or("output has no current mode")?;
+        let capture_size = region.map(|r| r.size).unwrap_or(mode.size);
+        let capture_size_buf: smithay::utils::Size<i32, smithay::utils::Buffer> =
+            (capture_size.w, capture_size.h).into();
+        let capture_loc: Point<i32, Physical> = region.map(|r| r.loc).unwrap_or((0, 0).into());
+
+        // --- render into an offscreen target ---
+        //
+        // `GlesTexture` — not a "Multi"-prefixed type. The compiler's error
+        // showed `GlesRenderer` (the concrete backend `MultiRenderer` wraps
+        // here) implementing `Offscreen<GlesTexture>` and
+        // `Offscreen<GlesRenderbuffer>` directly; `MultiRenderer` forwards
+        // through to whichever of those the inner renderer supports, rather
+        // than defining its own separate offscreen target type. Also:
+        // `bind()`'s real signature is `fn bind<'a>(&mut self, target: &'a
+        // mut Target) -> ...` — it takes `&mut Target`, not an owned
+        // `Target`, hence `target` needs to be `mut` and passed as
+        // `&mut target` below.
+        let mut target: smithay::backend::renderer::gles::GlesTexture = renderer
+            .create_buffer(Fourcc::Argb8888, capture_size_buf)
+            .map_err(|e| format!("failed to create offscreen buffer: {e}"))?;
+
+        let mut fb = renderer
+            .bind(&mut target)
+            .map_err(|e| format!("failed to bind offscreen target: {e}"))?;
+
+        let mut frame = renderer
+            .render(&mut fb, capture_size, Transform::Normal)
+            .map_err(|e| format!("failed to start frame: {e}"))?;
+        frame
+            .clear([0.0, 0.0, 0.0, 1.0].into(), &[Rectangle::from_size(capture_size)])
+            .map_err(|e| format!("failed to clear frame: {e}"))?;
+
+        // Elements are gathered top-most-first (cursor first, then space
+        // elements); draw back-to-front, so iterate in reverse.
+        for element in elements.iter().rev() {
+            let src = element.src();
+            let mut dst = element.geometry(smithay::utils::Scale::from(1.0));
+            dst.loc -= capture_loc; // shift so a cropped region lands at (0, 0)
+            let damage = [Rectangle::from_size(dst.size)];
+            if let Err(err) = element.draw(&mut frame, src, dst, &damage, &[]) {
+                eprintln!("screencopy: failed to draw element for {:?}: {:?}", output.name(), err);
+            }
+        }
+        let _sync_point = frame.finish().map_err(|e| format!("failed to finish frame: {e}"))?;
+        // _sync_point.wait(); // uncomment if readback below ever shows
+        // torn/stale content — some versions require an explicit wait
+        // before the framebuffer is readback-safe.
+
+        // --- read back and copy into the client's shm buffer ---
+        let mapping = renderer
+            .copy_framebuffer(&fb, Rectangle::from_size(capture_size_buf), Fourcc::Argb8888)
+            .map_err(|e| format!("failed to read back framebuffer: {e}"))?;
+        let pixels = renderer
+            .map_texture(&mapping)
+            .map_err(|e| format!("failed to map readback texture: {e}"))?;
+
+        with_buffer_contents_mut(buffer, |ptr, _len, data| {
+            let dst_stride = data.stride as usize;
+            let src_stride = capture_size.w as usize * 4;
+            let copy_len = src_stride.min(dst_stride);
+            for row in 0..capture_size.h as usize {
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        pixels.as_ptr().add(row * src_stride),
+                        ptr.add(row * dst_stride),
+                        copy_len,
+                    );
+                }
+            }
+        })
+        .map_err(|e| format!("failed to write into client shm buffer: {e:?}"))?;
+
+        Ok(())
     }
 }
 
@@ -360,7 +515,6 @@ pub fn device_added(
             Ok(())
         }
         Err(_) => {
-            // No KMS capability — register as a render-only GPU (e.g. AGX).
             let gbm = GbmDevice::new(fd)?;
             let render_node = node
                 .node_with_type(NodeType::Render)
@@ -377,26 +531,17 @@ pub fn device_added(
     }
 }
 
-/// Finishes setting up a KMS device once a render-capable GPU is known to be
-/// available — builds the allocator, registers with GpuManager, and
-/// constructs the DrmOutputManager. Takes an already-open fd/DrmDevice;
-/// never opens anything itself.
 fn finish_kms_device(
     alice: &mut Alice<UdevData>,
     node: DrmNode,
     fd: DrmDeviceFd,
     drm_device: DrmDevice,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Always local to this device's own fd — required so AddFB2 targets
-    // the right DRM device (the one that will actually scan out).
     let gbm = GbmDevice::new(fd)?;
 
     let own_render_node = node.node_with_type(NodeType::Render).and_then(|r| r.ok());
     let render_node = own_render_node.unwrap_or(alice.backend_data.primary_gpu);
 
-    // Buffer allocation must happen on a render-capable device. If this
-    // node can't render itself (e.g. DCP), borrow the cached render GBM
-    // device (e.g. AGX) purely for allocation.
     let alloc_gbm = if let Some(_) = own_render_node {
         gbm.clone()
     } else {
@@ -409,9 +554,6 @@ fn finish_kms_device(
     };
     let allocator = GbmAllocator::new(alloc_gbm, GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
 
-    // Only register this node with GpuManager if it's actually the
-    // render-capable one — the render-only node was already registered
-    // in device_added's fallback branch.
     if own_render_node.is_some() {
         if let Err(err) = alice.backend_data.gpus.as_mut().add_node(render_node, gbm.clone()) {
             eprintln!("Failed to add render node {:?}: {}", render_node, err);
@@ -483,9 +625,6 @@ fn connector_connected(
     crtc: crtc::Handle) {
     let name = format!("{}-{}", connector.interface().as_str(), connector.interface_id());
 
-    // Pull the user's config for this connector up front (position,
-    // transform, scale, refresh) so the desired refresh rate can influence
-    // which mode we pick below.
     let output_cfg = alice.config.get_output_position(&name);
 
     let modes = connector.modes();
@@ -496,8 +635,6 @@ fn connector_connected(
         .map(|m| m.size());
 
     let mode = match output_cfg.and_then(|cfg| cfg.refresh) {
-        // A refresh rate was requested: among modes at the preferred/first
-        // mode's resolution, pick whichever has the closest refresh rate.
         Some(target_hz) => modes
             .iter()
             .filter(|m| preferred_size.map_or(true, |size| m.size() == size))
@@ -545,10 +682,6 @@ fn connector_connected(
     );
     output.set_preferred(WlMode { size: (w as i32, h as i32).into(), refresh });
 
-    // Use the position the user configured for this connector (via
-    // `output_position(name, x, y, ...)` in config.lua), if any. Otherwise
-    // fall back to automatically tiling new outputs to the right of existing
-    // ones.
     let position = match output_cfg {
         Some(cfg) => (cfg.x, cfg.y),
         None => {
@@ -597,10 +730,6 @@ fn connector_connected(
                 },
             );
             drop(renderer);
-            // Defer the first frame instead of rendering inline: give the
-            // event loop a chance to dispatch the modeset commit's
-            // completion event first, so the CRTC isn't still "busy" when
-            // we submit the first real page flip.
             event_loop.insert_idle(move |data| {
                 render_surface(&mut data.state, node, crtc);
             });
@@ -634,7 +763,6 @@ pub fn device_removed(alice: &mut Alice<UdevData>, node: DrmNode) {
         }
     }
 
-    // If this was a render-only GPU (e.g. AGX unplugged, external eGPU, etc.)
     if alice.backend_data.render_gbm_devices.remove(&node).is_some() {
         alice.backend_data.gpus.as_mut().remove_node(&node);
     }
@@ -662,11 +790,53 @@ pub fn frame_finish(
         return;
     }
 
-    // The in-flight frame's vblank has landed: this CRTC is idle again
-    // until (and unless) the render below queues another one.
     surface.frame_pending = false;
 
     render_surface(alice, node, crtc);
+}
+
+/// Looks up the `LayoutScope` (output id + focused tag) for `output`, the
+/// same lookup both `render_surface` and `Backend::copy_frame` need before
+/// they can gather render elements. Takes `&Outputs` specifically (not
+/// `&Alice<UdevData>`) so it can be called from contexts — like
+/// `copy_frame`, which receives `alice` and `self: &mut UdevData` as
+/// separate parameters — that don't have a single combined `Alice` borrow
+/// available.
+fn output_scope(outputs: &Outputs, output: &Output) -> Option<LayoutScope> {
+    let info = outputs.get(&output.name())?;
+    let tag = outputs.get_focused_tag(info.id)?;
+    Some(LayoutScope { output: info.id, tag })
+}
+
+/// Builds the space's render elements for `output` — fullscreen-window
+/// substitution if applicable, otherwise the normal layered space. Shared
+/// between the scanout path (`render_surface`) and screencopy
+/// (`Backend::copy_frame`) so the two never drift out of sync with each
+/// other.
+fn output_space_elements<'a>(
+    renderer: &mut UdevRenderer<'a>,
+    space: &Space<Window>,
+    window_registry: &crate::window::WindowRegistry,
+    output: &Output,
+    scope: LayoutScope,
+) -> Result<Vec<UdevRenderElement<'a>>, OutputNoMode> {
+    if let Some(fs_window) = window_registry.fullscreen_window_for_output(&scope) {
+        fullscreen_output_elements(renderer, space, output, &fs_window, 1.0)
+    } else {
+        // `Space::render_elements_for_output` (the method) positions layer-shell
+        // elements using only the output's own location, never the position
+        // `LayerMap::arrange` actually computed for them (`layer_geometry`) — so
+        // every layer surface (panels, bars, launchers) renders pinned near its
+        // own local (0, 0) regardless of anchor/centering, while hit-testing
+        // (which does read `layer_geometry` — see `Alice::layer_under` /
+        // `surface_under`) reports the correct arranged position. The visible
+        // result is a bar stuck in a corner whose click target is wherever it
+        // was actually supposed to be. `space_render_elements` (the free
+        // function; this is what winit's `render_output` already uses
+        // internally, which is why this backend didn't show the bug) builds the
+        // same element list but positions layers via `layer_geometry` correctly.
+        space_render_elements(renderer, [space], output, 1.0)
+    }
 }
 
 fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle) {
@@ -690,47 +860,23 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     };
     let output = surface.output.clone();
 
-    let Some(info) = alice.outputs.get(&output.name()) else {
+    let Some(scope) = output_scope(&alice.outputs, &output) else {
         return;
     };
-    let Some(tag) = alice.outputs.get_focused_tag(info.id) else {
-        return
-    };
-    let scope = LayoutScope {
-        output: info.id,
-        tag,
-    };
 
-    let space_elements: Vec<UdevRenderElement<'_>> =
-        if let Some(fs_window) = alice.window_registry.fullscreen_window_for_output(&scope) {
-            match fullscreen_output_elements(&mut renderer, &alice.space, &output, &fs_window, 1.0) {
-                Ok(elements) => elements,
-                Err(err) => {
-                    eprintln!("Failed to gather render elements for {:?}: {:?}", output.name(), err);
-                    return;
-                }
-            }
-        } else {
-            // `Space::render_elements_for_output` (the method) positions layer-shell
-            // elements using only the output's own location, never the position
-            // `LayerMap::arrange` actually computed for them (`layer_geometry`) — so
-            // every layer surface (panels, bars, launchers) renders pinned near its
-            // own local (0, 0) regardless of anchor/centering, while hit-testing
-            // (which does read `layer_geometry` — see `Alice::layer_under` /
-            // `surface_under`) reports the correct arranged position. The visible
-            // result is a bar stuck in a corner whose click target is wherever it
-            // was actually supposed to be. `space_render_elements` (the free
-            // function; this is what winit's `render_output` already uses
-            // internally, which is why this backend didn't show the bug) builds the
-            // same element list but positions layers via `layer_geometry` correctly.
-            match space_render_elements(&mut renderer, [&alice.space], &output, 1.0) {
-                Ok(elements) => elements,
-                Err(err) => {
-                    eprintln!("Failed to gather render elements for {:?}: {:?}", output.name(), err);
-                    return;
-                }
-            }
-        };
+    let space_elements = match output_space_elements(
+        &mut renderer,
+        &alice.space,
+        &alice.window_registry,
+        &output,
+        scope,
+    ) {
+        Ok(elements) => elements,
+        Err(err) => {
+            eprintln!("Failed to gather render elements for {:?}: {:?}", output.name(), err);
+            return;
+        }
+    };
 
     crate::cursor::reset_cursor_if_dead(&mut alice.cursor_status);
     let output_geo = alice.space.output_geometry(&output).unwrap();
@@ -761,8 +907,6 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
             if let Err(err) = surface.drm_output.queue_frame(()) {
                 eprintln!("Failed to queue frame on crtc {:?}: {}", crtc, err);
             } else {
-                // A page-flip is now in flight; schedule_render will leave
-                // this CRTC alone until frame_finish sees its vblank.
                 surface.frame_pending = true;
             }
         }
@@ -794,7 +938,7 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
 
 fn fullscreen_output_elements<'a>(
     renderer: &mut UdevRenderer<'a>,
-    space: &Space<Window>,
+    _space: &Space<Window>,
     output: &Output,
     fs_window: &Window,
     scale: f64,
@@ -803,7 +947,6 @@ fn fullscreen_output_elements<'a>(
     let mut elements = Vec::new();
     let layer_map = layer_map_for_output(output);
 
-    // 1. Overlay stays on top even over the fullscreen window
     for layer in layer_map.layers_on(Layer::Overlay) {
         let Some(geo) = layer_map.layer_geometry(layer) else { continue };
         elements.extend(layer.render_elements(
@@ -814,20 +957,13 @@ fn fullscreen_output_elements<'a>(
         ));
     }
 
-    // 2. The fullscreen window takes the place of `top` + normal windows.
-    //    Its location should just be the output's origin, since it's sized
-    //    to fill the whole output.
     elements.extend(fs_window.render_elements(
         renderer,
         (0, 0).into(),
         scale,
         1.0,
     ));
-    // NB: deliberately no Layer::Top pass here — that's what hides the bar.
 
-    // 3. Bottom / background stay under it (mostly irrelevant since the
-    //    fullscreen window is opaque and covers the whole output, but keeps
-    //    behavior consistent, e.g. during resize/transition frames).
     for layer_kind in [Layer::Bottom, Layer::Background] {
         for layer in layer_map.layers_on(layer_kind) {
             let Some(geo) = layer_map.layer_geometry(layer) else { continue };
