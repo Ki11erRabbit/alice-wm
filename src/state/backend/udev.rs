@@ -523,8 +523,39 @@ impl Backend for UdevData {
             .map_texture(&mapping)
             .map_err(|e| format!("failed to map readback texture: {e}"))?;
 
-        with_buffer_contents_mut(buffer, |ptr, _len, data| {
+        with_buffer_contents_mut(buffer, |ptr, len, data| {
             let dst_stride = data.stride as usize;
+
+            // The client's actual buffer was allocated based on the
+            // width/height/stride advertised in `init_frame`'s `frame.buffer(...)`
+            // call, at `capture_output`/`capture_output_region` time. `capture_size`
+            // here is recomputed independently from the *current* output mode/region
+            // math at `copy` time, which is not guaranteed to still agree (a modeset
+            // race, a rounding difference, or simply a misbehaving/malicious client
+            // that calls `copy` with a buffer that doesn't match what it was told).
+            // Trusting `capture_size` blindly here would walk off the end of the
+            // client's shared memory mapping and corrupt whatever heap data happens
+            // to sit past it *in the client's own process* — silent memory
+            // corruption there, not a crash here, which is exactly why it's so hard
+            // to trace back. Validate against the buffer's own reported dimensions
+            // and the real mapped length before writing a single byte.
+            if capture_size.w < 0
+                || capture_size.h < 0
+                || capture_size.w > data.width
+                || capture_size.h > data.height
+            {
+                return Err(format!(
+                    "requested capture size {:?} exceeds client buffer dimensions {}x{}",
+                    capture_size, data.width, data.height
+                ));
+            }
+            let needed = dst_stride.saturating_mul(capture_size.h as usize);
+            if needed > len {
+                return Err(format!(
+                    "requested capture needs {needed} bytes but client buffer is only {len} bytes"
+                ));
+            }
+
             let full_stride = full_size.w as usize * 4;
             let row_bytes = (capture_size.w as usize * 4).min(dst_stride);
             let x_offset_bytes = capture_loc.x as usize * 4;
@@ -538,8 +569,9 @@ impl Backend for UdevData {
                     );
                 }
             }
+            Ok(())
         })
-        .map_err(|e| format!("failed to write into client shm buffer: {e:?}"))?;
+        .map_err(|e| format!("failed to write into client shm buffer: {e:?}"))??;
 
         Ok(())
     }

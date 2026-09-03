@@ -395,8 +395,31 @@ impl Backend for WinitData {
             .map_texture(&mapping)
             .map_err(|e| format!("failed to map readback texture: {e}"))?;
 
-        with_buffer_contents_mut(buffer, |ptr, _len, data| {
+        with_buffer_contents_mut(buffer, |ptr, len, data| {
             let dst_stride = data.stride as usize;
+
+            // See the matching comment in udev.rs's `copy_frame`: `capture_size` is
+            // recomputed independently at `copy` time and isn't guaranteed to still
+            // match the buffer the client actually allocated back when `buffer()`
+            // was sent. Writing past it corrupts the *client's* heap silently rather
+            // than crashing here, so validate before touching any memory.
+            if capture_size.w < 0
+                || capture_size.h < 0
+                || capture_size.w > data.width
+                || capture_size.h > data.height
+            {
+                return Err(format!(
+                    "requested capture size {:?} exceeds client buffer dimensions {}x{}",
+                    capture_size, data.width, data.height
+                ));
+            }
+            let needed = dst_stride.saturating_mul(capture_size.h as usize);
+            if needed > len {
+                return Err(format!(
+                    "requested capture needs {needed} bytes but client buffer is only {len} bytes"
+                ));
+            }
+
             let full_stride = full_size.w as usize * 4;
             let row_bytes = (capture_size.w as usize * 4).min(dst_stride);
             let x_offset_bytes = capture_loc.x as usize * 4;
@@ -411,8 +434,9 @@ impl Backend for WinitData {
                     );
                 }
             }
+            Ok(())
         })
-        .map_err(|e| format!("failed to write into client shm buffer: {e:?}"))?;
+        .map_err(|e| format!("failed to write into client shm buffer: {e:?}"))??;
 
         Ok(())
     }
