@@ -5,7 +5,7 @@ use smithay::{
     reexports::wayland_server::{backend::ObjectId, protocol::wl_surface::WlSurface, Resource},
 };
 
-use crate::output::{LayoutScope, OutputId, TagId};
+use crate::{layout::Rect, output::{LayoutScope, OutputId, TagId}};
 
 
 
@@ -32,6 +32,14 @@ pub struct WindowInfo {
     /// These are deliberately kept out of the tiling grid: see
     /// `Alice::relayout_single`/`apply_floating`.
     pub floating: bool,
+    /// The (rect, fullscreen) this window's toplevel was last sent a
+    /// `configure` for, via `apply_rects`/`apply_floating` — `None` until
+    /// the first one goes out. Used to skip redundant configures: see the
+    /// comment on `apply_rects` for why sending one unconditionally on
+    /// every `relayout` call, even when nothing about this window actually
+    /// changed, is what was flooding clients with new serials fast enough
+    /// to crash them.
+    pub last_configured: Option<(Rect, bool)>,
 }
 
 impl WindowInfo {
@@ -47,6 +55,7 @@ impl WindowInfo {
             window,
             fullscreen: false,
             floating,
+            last_configured: None,
         }
     }
 }

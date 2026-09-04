@@ -464,15 +464,51 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let Some(window) = self.window_registry.get(&id) else {
             return;
         };
-        window.window.toplevel().unwrap().with_pending_state(|state| {
-            state.size = Some((rect.width, rect.height).into());
-            if window.fullscreen {
-                state.states.set(xdg_toplevel::State::Fullscreen)
-            } else {
-                state.states.unset(xdg_toplevel::State::Fullscreen)
+
+        // `relayout` re-derives and re-applies rects for every window in a
+        // scope on all sorts of triggers that don't actually change any
+        // individual window's target geometry (another window's commit,
+        // a sibling being (re)mapped, a layer-shell surface adjusting its
+        // exclusive zone, etc.). Unconditionally sending a fresh
+        // `xdg_toplevel.configure` here regardless — as this used to —
+        // means every one of those no-op relayouts hands out a brand new
+        // configure serial to every window in the scope, whether or not
+        // its size/state actually changed.
+        //
+        // Normally that's just wasteful. But when something drives
+        // `relayout` at high frequency — video playback in one window
+        // was observed doing this, likely via a layer-shell panel
+        // reacting to media state on roughly every frame — it floods
+        // *every other window sharing that scope* with new serials fast
+        // enough that a client can fall behind acking them. When that
+        // happens, Smithay's own xdg_shell validation sees an
+        // `ack_configure` for a serial it no longer considers current and
+        // posts a fatal `xdg_wm_base` "wrong configure serial" protocol
+        // error — which is exactly what killed Zen here (see the
+        // WAYLAND_DEBUG trace this was diagnosed from). The fix isn't to
+        // relax that validation (it's correct per-spec); it's to stop
+        // manufacturing configures nothing asked for. Skip sending one at
+        // all when the target (rect, fullscreen) hasn't actually changed
+        // since the last one we sent.
+        let target = (rect, window.fullscreen);
+        if window.last_configured != Some(target) {
+            window.window.toplevel().unwrap().with_pending_state(|state| {
+                state.size = Some((rect.width, rect.height).into());
+                if window.fullscreen {
+                    state.states.set(xdg_toplevel::State::Fullscreen)
+                } else {
+                    state.states.unset(xdg_toplevel::State::Fullscreen)
+                }
+            });
+            window.window.toplevel().unwrap().send_configure();
+            if let Some(window) = self.window_registry.get_mut(&id) {
+                window.last_configured = Some(target);
             }
-        });
-        window.window.toplevel().unwrap().send_configure();
+        }
+
+        let Some(window) = self.window_registry.get(&id) else {
+            return;
+        };
         self.space.map_element(window.window.clone(), (rect.x, rect.y), false);
         //,eprintln!("apply_rects: window {:?} -> {:?}", id, rect);
     }
@@ -499,14 +535,33 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             (640, 480)
         };
 
-        window.window.toplevel().unwrap().with_pending_state(|state| {
-            state.size = None;
-            state.states.unset(xdg_toplevel::State::Fullscreen);
-        });
-        window.window.toplevel().unwrap().send_configure();
+        // Same dedup as `apply_rects` (see its comment for why this
+        // matters): a floating window's configure never actually varies —
+        // size is always "client's choice" (`None`) and fullscreen is
+        // always unset here — so there's nothing to compare against a
+        // *changing* target. This sentinel just marks "have we ever sent
+        // this window its (only ever needed) floating configure", so
+        // repeated `relayout` calls (e.g. every time this window is
+        // recentered by a sibling mapping/closing) don't keep manufacturing
+        // new serials for a configure whose content never differs from the
+        // last one.
+        const FLOATING_SENTINEL: Rect = Rect { x: 0, y: 0, width: 0, height: 0 };
+        if window.last_configured != Some((FLOATING_SENTINEL, false)) {
+            window.window.toplevel().unwrap().with_pending_state(|state| {
+                state.size = None;
+                state.states.unset(xdg_toplevel::State::Fullscreen);
+            });
+            window.window.toplevel().unwrap().send_configure();
+            if let Some(window) = self.window_registry.get_mut(&id) {
+                window.last_configured = Some((FLOATING_SENTINEL, false));
+            }
+        }
 
         let x = area.x + (area.width - w).max(0) / 2;
         let y = area.y + (area.height - h).max(0) / 2;
+        let Some(window) = self.window_registry.get(&id) else {
+            return;
+        };
         self.space.map_element(window.window.clone(), (x, y), false);
     }
 
