@@ -13,7 +13,7 @@ use smithay::{
         renderer::{
             Bind, ExportMem, Frame, ImportDma, Offscreen, Renderer,
             damage::OutputDamageTracker,
-            element::{AsRenderElements, Element, RenderElement, surface::WaylandSurfaceRenderElement},
+            element::{AsRenderElements, Element, Kind, RenderElement, surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree}},
             gles::GlesRenderer,
             multigpu::{GpuManager, MultiRenderer, gbm::GbmGlesBackend},
         },
@@ -28,7 +28,7 @@ use smithay::{
         input::Libinput,
         rustix::fs::OFlags,
         wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
-        wayland_server::{Display, backend::GlobalId, protocol::wl_buffer::WlBuffer},
+        wayland_server::{Display, backend::GlobalId, protocol::{wl_buffer::WlBuffer, wl_output::WlOutput}},
     },
     // NB: deliberately NOT importing `smithay::utils::Scale` here — `Scale`
     // above (from `smithay::output`) is a different type used for output
@@ -36,9 +36,7 @@ use smithay::{
     // full path (`smithay::utils::Scale::from(...)`) to avoid the collision.
     utils::{DeviceFd, Physical, Point, Rectangle, Transform},
     wayland::{
-        dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
-        shell::wlr_layer::Layer,
-        shm::with_buffer_contents_mut,
+        dmabuf::{DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier}, session_lock::LockSurface, shell::wlr_layer::Layer, shm::with_buffer_contents_mut
     },
 };
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
@@ -366,7 +364,7 @@ impl Backend for UdevData {
         let scope = output_scope(&alice.outputs, output).ok_or("no LayoutScope for output")?;
 
         let space_elements =
-            output_space_elements(&mut renderer, &alice.space, &alice.window_registry, output, scope)
+            output_space_elements(&mut renderer, &alice.space, &alice.window_registry, output, scope, &alice.lock_surfaces)
                 .map_err(|e| format!("failed to gather render elements: {e:?}"))?;
 
         let mut elements: Vec<UdevFrameRenderElement<'_>> =
@@ -917,6 +915,11 @@ pub fn frame_finish(
 
     surface.frame_pending = false;
 
+    if alice.locked {
+        alice.blanked_outputs.insert(surface.output.clone());
+        alice.try_lock();
+    }
+
     render_surface(alice, node, crtc);
 }
 
@@ -944,8 +947,11 @@ fn output_space_elements<'a>(
     window_registry: &crate::window::WindowRegistry,
     output: &Output,
     scope: LayoutScope,
+    lock_surfaces: &HashMap<Output, LockSurface>,
 ) -> Result<Vec<UdevRenderElement<'a>>, OutputNoMode> {
-    if let Some(fs_window) = window_registry.fullscreen_window_for_output(&scope) {
+    if let Some(surface) = lock_surfaces.get(output) {
+        render_lock_surfaces(renderer, output, surface, 1.0)
+    } else if let Some(fs_window) = window_registry.fullscreen_window_for_output(&scope) {
         fullscreen_output_elements(renderer, space, output, &fs_window, 1.0)
     } else {
         // `Space::render_elements_for_output` (the method) positions layer-shell
@@ -995,6 +1001,7 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         &alice.window_registry,
         &output,
         scope,
+        &alice.lock_surfaces,
     ) {
         Ok(elements) => elements,
         Err(err) => {
@@ -1104,6 +1111,38 @@ fn fullscreen_output_elements<'a>(
     Ok(elements)
 }
 
+
+fn render_lock_surfaces<'a>(
+    renderer: &mut UdevRenderer<'a>,
+    output: &Output,
+    lock_surface: &LockSurface,
+    scale: f64,
+) -> Result<Vec<UdevRenderElement<'a>>, OutputNoMode> {
+    let scale: smithay::utils::Scale<f64> = smithay::utils::Scale::from(scale);
+    let mut elements = Vec::new();
+    let layer_map = layer_map_for_output(output);
+
+    for layer in layer_map.layers_on(Layer::Overlay) {
+        let Some(geo) = layer_map.layer_geometry(layer) else { continue };
+        elements.extend(layer.render_elements(
+            renderer,
+            geo.loc.to_physical_precise_round(scale),
+            scale,
+            1.0,
+        ));
+    }
+
+    elements.extend(render_elements_from_surface_tree(
+        renderer,
+        lock_surface.wl_surface(),
+        (0, 0),
+        scale,
+        1.0,
+        Kind::Unspecified,
+    ));
+
+    Ok(elements)
+}
 impl DmabufHandler for Alice<UdevData> {
     fn dmabuf_state(&mut self) -> &mut DmabufState {
         &mut self.backend_data.dmabuf_state.as_mut().unwrap().0

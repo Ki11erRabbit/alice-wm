@@ -207,6 +207,7 @@ impl KeyboardLayout {
 
 pub struct Config {
     map: HashMap<KeyPress, Action>,
+    lock_map: HashMap<KeyPress, Action>,
     output_positions: HashMap<String, OutputPosition>,
     auto_start: Vec<String>,
     keyboard_layout: KeyboardLayout,
@@ -217,6 +218,7 @@ impl Config {
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
+            lock_map: HashMap::new(),
             output_positions: HashMap::new(),
             auto_start: Vec::new(),
             keyboard_layout: KeyboardLayout::default(),
@@ -230,6 +232,14 @@ impl Config {
 
     pub fn insert_keypress(&mut self, press: KeyPress, action: Action) {
         self.map.insert(press, action);
+    }
+
+    pub fn get_lock_keypress(&self, press: &KeyPress) -> Option<&Action> {
+        self.lock_map.get(press)
+    }
+
+    pub fn insert_lock_keypress(&mut self, press: KeyPress, action: Action) {
+        self.lock_map.insert(press, action);
     }
 
     /// Look up the configured position (and transform/scale/refresh) for an
@@ -442,6 +452,7 @@ impl Default for Config {
 
         Self {
             map,
+            lock_map: HashMap::new(),
             output_positions: HashMap::new(),
             auto_start: Vec::new(),
             keyboard_layout: KeyboardLayout::default(),
@@ -616,6 +627,15 @@ fn load_config(use_alt: bool, file_text: &str) -> mlua::Result<Config> {
         let config = config_clone.clone();
         let mut guard = config.borrow_mut();
         guard.insert_keypress(keypress, action);
+        Ok(())
+    })?)?;
+
+    let config_clone = config.clone();
+
+    lua.globals().set("lock_bind", lua.create_function_mut(move |_, (keypress, action): (KeyPress, Action)| {
+        let config = config_clone.clone();
+        let mut guard = config.borrow_mut();
+        guard.insert_lock_keypress(keypress, action);
         Ok(())
     })?)?;
 

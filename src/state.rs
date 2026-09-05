@@ -1,19 +1,14 @@
 pub mod backend;
 
-use std::{ffi::OsString, sync::Arc};
+use std::{collections::{HashMap, HashSet}, ffi::OsString, sync::Arc};
 
 use smithay::{
     backend::renderer::{Renderer, element::{AsRenderElements, RenderElement}}, desktop::{PopupManager, Space, Window, WindowSurfaceType, layer_map_for_output, space::space_render_elements}, input::{Seat, SeatState, keyboard::{Keysym, ModifiersState}}, output::Output, reexports::{
         calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic}, wayland_protocols::xdg::shell::server::xdg_toplevel, wayland_server::{
-            Display, DisplayHandle, backend::{ClientData, ClientId, DisconnectReason}, protocol::wl_surface::WlSurface
+            Display, DisplayHandle, backend::{ClientData, ClientId, DisconnectReason}, protocol::{wl_output::WlOutput, wl_surface::WlSurface}
         }
     }, utils::{Logical, Point, SERIAL_COUNTER}, wayland::{
-        compositor::{CompositorClientState, CompositorState},
-        output::OutputManagerState,
-        selection::data_device::DataDeviceState,
-        shell::{wlr_layer::{self, WlrLayerShellState}, xdg::XdgShellState},
-        shm::ShmState,
-        socket::ListeningSocketSource,
+        compositor::{CompositorClientState, CompositorState}, output::OutputManagerState, selection::data_device::DataDeviceState, session_lock::{LockSurface, SessionLockManagerState, SessionLocker}, shell::{wlr_layer::{self, WlrLayerShellState}, xdg::XdgShellState}, shm::ShmState, socket::ListeningSocketSource
     }
 };
 
@@ -38,6 +33,12 @@ pub struct Alice<BackendData: Backend + 'static> {
 
     pub config: Config,
     pub done_autostart: bool,
+
+    pub session_lock_manager_state: SessionLockManagerState,
+    pub locked: bool,
+    pub pending_locker: Option<SessionLocker>,
+    pub lock_surfaces: HashMap<Output, LockSurface>,
+    pub blanked_outputs: HashSet<Output>,
 
     // Smithay State
     pub compositor_state: CompositorState,
@@ -101,6 +102,8 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         let layer_shell_state = WlrLayerShellState::new::<Alice<BackendData>>(&dh);
 
+        let session_lock_manager_state = SessionLockManagerState::new::<Alice<BackendData>, _>(&dh, |_client| true);
+
         let mut out = Self {
             backend_data: backend,
 
@@ -120,6 +123,12 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
             config,
             done_autostart: false,
+
+            session_lock_manager_state,
+            locked: false,
+            pending_locker: None,
+            lock_surfaces: HashMap::new(),
+            blanked_outputs: HashSet::new(),
 
             compositor_state,
             xdg_shell_state,
@@ -302,6 +311,10 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             l.surface_under(pos - output_loc - layer_loc, WindowSurfaceType::ALL)
                 .map(|(s, p)| (s, Point::<f64, Logical>::new(p.x as f64 + layer_loc.x as f64 + output_loc.x, (p.y as f64 + layer_loc.y as f64 + output_loc.y).into())))
         };
+
+        if self.locked && let Some(surface) = self.lock_surfaces.get(&output) {
+            return Some((surface.wl_surface().clone(), pos))
+        }
 
         // Overlay and Top surfaces (bars, launchers, notifications) sit above windows.
         if let Some(hit) = under_layer(wlr_layer::Layer::Overlay).or_else(|| under_layer(wlr_layer::Layer::Top)) {
@@ -1126,7 +1139,12 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
     pub fn try_handle_keypress(&mut self, mods: &ModifiersState, sym: Keysym) -> bool {
         let keypress = KeyPress::from((mods, sym));
 
-        if let Some(action) = self.config.get_keypress(&keypress) {
+        if self.locked && let Some(action) = self.config.get_lock_keypress(&keypress) {
+            let action = action.clone();
+            self.handle_action(action);
+            true
+
+        } else if !self.locked && let Some(action) = self.config.get_keypress(&keypress) {
             let action = action.clone();
             self.handle_action(action);
             true
@@ -1256,6 +1274,30 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         }
     }
 
+    pub fn try_lock(&mut self) {
+        if !self.locked {
+            return;
+        }
+
+        let all_blanked = self.space.outputs()
+            .all(|o| self.blanked_outputs.contains(o));
+
+        if all_blanked {
+            let Some(confirmation) = self.pending_locker.take() else {
+                return;
+            };
+            confirmation.lock();
+        }
+    }
+
+    pub fn try_unlock(&mut self) {
+        if !self.locked {
+            return;
+        }
+
+        self.locked = false;
+        self.blanked_outputs.clear();
+    }
 }
 
 /// Returns 0 if the two 1D ranges `[a0, a0+al)` and `[b0, b0+bl)` overlap,

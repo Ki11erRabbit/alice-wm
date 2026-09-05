@@ -182,6 +182,11 @@ impl Backend for WinitData {
                     }
                     state.backend_data.backend.submit(Some(&[damage])).unwrap();
 
+                    if state.locked {
+                        state.blanked_outputs.insert(output.clone());
+                        state.try_lock();
+                    }
+
                     state.space.elements().for_each(|window| {
                         window.send_frame(
                             &output,

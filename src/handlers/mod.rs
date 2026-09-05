@@ -2,6 +2,7 @@ mod compositor;
 mod xdg_shell;
 mod wlr_shell;
 mod capture;
+mod lock;
 
 use crate::Alice;
 use crate::state::backend::Backend;
