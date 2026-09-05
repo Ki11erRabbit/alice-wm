@@ -1307,6 +1307,21 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         self.locked = false;
         self.blanked_outputs.clear();
+        self.lock_surfaces.clear();;
+        self.lock_focus_output = None;
+
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let serial = SERIAL_COUNTER.next_serial();
+
+        let focus_target = self
+            .window_registry
+            .focused_window()
+            .and_then(|id| self.window_registry.get(&id))
+            .and_then(|info| info.window.toplevel())
+            .map(|toplevel| toplevel.wl_surface().clone());
+
+        keyboard.set_focus(self, focus_target, serial);
+
     }
 }
 
