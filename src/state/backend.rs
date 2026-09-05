@@ -27,6 +27,7 @@ pub trait Backend: Sized {
         overlay_cursor: bool,
         buffer: &WlBuffer,
     ) -> Result<(), Box<dyn std::error::Error>>;
+    fn change_vt(&mut self, vt: i32);
 
 }
 

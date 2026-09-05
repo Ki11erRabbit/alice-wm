@@ -475,4 +475,6 @@ impl Backend for WinitData {
 
         Ok(())
     }
+
+    fn change_vt(&mut self, _vt: i32) {}
 }

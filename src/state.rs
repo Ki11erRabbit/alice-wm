@@ -1139,6 +1139,14 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
     /// Returns `true` if the keypress was handled
     pub fn try_handle_keypress(&mut self, mods: &ModifiersState, sym: Keysym) -> bool {
+
+        const VT_SWITCH_1: u32 = Keysym::XF86_Switch_VT_1.raw();
+        const VT_SWITCH_12: u32 = Keysym::XF86_Switch_VT_12.raw();
+        if sym.raw() >= VT_SWITCH_1 && sym.raw() <= VT_SWITCH_12 {
+            let vt = (sym.raw() - VT_SWITCH_1 + 1) as i32;
+            self.backend_data.change_vt(vt);
+            return true;
+        }
         let keypress = KeyPress::from((mods, sym));
 
         if self.locked && let Some(action) = self.config.get_lock_keypress(&keypress) {

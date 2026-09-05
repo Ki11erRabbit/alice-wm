@@ -573,6 +573,10 @@ impl Backend for UdevData {
 
         Ok(())
     }
+
+    fn change_vt(&mut self, vt: i32) {
+        _ = self.session.change_vt(vt);
+    }
 }
 
 // ---------------------------------------------------------------------
