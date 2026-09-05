@@ -39,6 +39,7 @@ pub struct Alice<BackendData: Backend + 'static> {
     pub pending_locker: Option<SessionLocker>,
     pub lock_surfaces: HashMap<Output, LockSurface>,
     pub blanked_outputs: HashSet<Output>,
+    pub lock_focus_output: Option<Output>,
 
     // Smithay State
     pub compositor_state: CompositorState,
@@ -129,6 +130,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             pending_locker: None,
             lock_surfaces: HashMap::new(),
             blanked_outputs: HashSet::new(),
+            lock_focus_output: None,
 
             compositor_state,
             xdg_shell_state,

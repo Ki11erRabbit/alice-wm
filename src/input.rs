@@ -43,9 +43,11 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 self.follow_pointer_output_focus(pos);
 
                 let under = self.surface_under(pos);
-                let surface_under = self.space.element_under(pos);
-                if let Some((window, _)) = surface_under {
-                    self.focus_window(window.clone());
+                if !self.locked {
+                    let surface_under = self.space.element_under(pos);
+                    if let Some((window, _)) = surface_under {
+                        self.focus_window(window.clone());
+                    }
                 }
 
                 pointer.motion(
@@ -73,11 +75,12 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 let pointer = self.seat.get_pointer().unwrap();
 
                 let under = self.surface_under(pos);
-                let surface_under = self.space.element_under(pointer.current_location());
-                if let Some((window, _)) = surface_under {
-                    self.focus_window(window.clone());
+                if !self.locked {
+                    let surface_under = self.space.element_under(pointer.current_location());
+                    if let Some((window, _)) = surface_under {
+                        self.focus_window(window.clone());
+                    }
                 }
-
 
                 pointer.motion(
                     self,
@@ -101,7 +104,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
                 let button_state = event.state();
 
-                if ButtonState::Pressed == button_state && !pointer.is_grabbed() {
+                if ButtonState::Pressed == button_state && !pointer.is_grabbed() && !self.locked {
                     let pos = pointer.current_location();
 
                     // Mirror `surface_under`'s z-order: Overlay/Top layer

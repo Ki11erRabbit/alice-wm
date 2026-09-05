@@ -1,4 +1,4 @@
-use smithay::{delegate_session_lock, output::Output, wayland::session_lock::SessionLockHandler};
+use smithay::{delegate_session_lock, output::Output, utils::SERIAL_COUNTER, wayland::session_lock::SessionLockHandler};
 
 use crate::{Alice, state::backend::Backend};
 
@@ -26,7 +26,21 @@ impl<BackendData: Backend + 'static> SessionLockHandler for Alice<BackendData> {
         let Some(output) = Output::from_resource(&output) else {
             return
         };
-        self.lock_surfaces.insert(output, surface);
+        self.lock_surfaces.insert(output.clone(), surface.clone());
+        if !self.locked {
+            return
+        }
+
+        let focused_output = self.outputs.get_focused().output.clone();
+        let already_focused = self.lock_focus_output.is_some();
+
+        if output == focused_output || !already_focused {
+            let serial = SERIAL_COUNTER.next_serial();
+            self.seat.get_keyboard()
+                .unwrap()
+                .set_focus(self, Some(surface.wl_surface().clone()), serial);
+            self.lock_focus_output = Some(output);
+        }
     }
 }
 

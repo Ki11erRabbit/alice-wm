@@ -7,7 +7,12 @@ use smithay::{
         input::{DeviceCapability, InputEvent},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
-            damage::OutputDamageTracker, gles::{GlesRenderer, GlesTexture}, Bind, ExportMem, Offscreen,
+            damage::OutputDamageTracker,
+            element::{
+                surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
+                Kind,
+            },
+            gles::{GlesRenderer, GlesTexture}, Bind, ExportMem, Offscreen,
         },
         session::{Session, libseat::LibSeatSession},
         udev::{UdevBackend, primary_gpu},
@@ -153,32 +158,57 @@ impl Backend for WinitData {
                     {
                         let (renderer, mut framebuffer) = state.backend_data.backend.bind().unwrap();
 
-                        let cursor_elements: Vec<crate::cursor::PointerRenderElement<GlesRenderer>> =
-                            crate::cursor::cursor_render_elements(
-                                &mut state.backend_data.pointer_element,
-                                &cursor_status,
-                                renderer,
-                                cursor_pos,
-                                output_scale,
-                            );
+                        if state.locked {
+                            // Locked: draw only this output's lock surface (or a
+                            // blank frame if the lock client hasn't created one
+                            // for this output yet) — never the normal space, so
+                            // real window content can't leak through here.
+                            let lock_elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                                match state.lock_surfaces.get(&output) {
+                                    Some(lock_surface) => render_elements_from_surface_tree(
+                                        renderer,
+                                        lock_surface.wl_surface(),
+                                        (0, 0),
+                                        1.0,
+                                        1.0,
+                                        Kind::Unspecified,
+                                    ),
+                                    None => Vec::new(),
+                                };
 
-                        smithay::desktop::space::render_output::<
-                            _,
-                            crate::cursor::PointerRenderElement<GlesRenderer>,
-                            _,
-                            _,
-                        >(
-                            &output,
-                            renderer,
-                            &mut framebuffer,
-                            1.0,
-                            0,
-                            [&state.space],
-                            &cursor_elements,
-                            &mut state.backend_data.damage_tracker,
-                            [0.1, 0.1, 0.1, 1.0],
-                        )
-                        .unwrap();
+                            state
+                                .backend_data
+                                .damage_tracker
+                                .render_output(renderer, &mut framebuffer, 0, &lock_elements, [0.0, 0.0, 0.0, 1.0])
+                                .unwrap();
+                        } else {
+                            let cursor_elements: Vec<crate::cursor::PointerRenderElement<GlesRenderer>> =
+                                crate::cursor::cursor_render_elements(
+                                    &mut state.backend_data.pointer_element,
+                                    &cursor_status,
+                                    renderer,
+                                    cursor_pos,
+                                    output_scale,
+                                );
+
+                            smithay::desktop::space::render_output::<
+                                _,
+                                crate::cursor::PointerRenderElement<GlesRenderer>,
+                                _,
+                                _,
+                            >(
+                                &output,
+                                renderer,
+                                &mut framebuffer,
+                                1.0,
+                                0,
+                                [&state.space],
+                                &cursor_elements,
+                                &mut state.backend_data.damage_tracker,
+                                [0.1, 0.1, 0.1, 1.0],
+                            )
+                            .unwrap();
+                        }
                     }
                     state.backend_data.backend.submit(Some(&[damage])).unwrap();
 
