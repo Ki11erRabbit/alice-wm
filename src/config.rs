@@ -609,6 +609,8 @@ fn parse_keystring(key: &str) -> mlua::Result<Keysym> {
         "Down" => Ok(Keysym::Down),
         "XF86AudioRaiseVolume" => Ok(Keysym::XF86_AudioRaiseVolume),
         "XF86AudioLowerVolume" => Ok(Keysym::XF86_AudioLowerVolume),
+        "XF86MonBrightnessUp" => Ok(Keysym::XF86_MonBrightnessUp),
+        "XF86MonBrightnessDown" => Ok(Keysym::XF86_MonBrightnessDown),
         "XF86AudioMute" => Ok(Keysym::XF86_AudioMute),
         x => todo!("handle additional keysyms: {x}"),
     }
@@ -623,9 +625,12 @@ fn load_config(use_alt: bool, file_text: &str) -> mlua::Result<Config> {
 
     let config_clone = config.clone();
 
-    lua.globals().set("bind", lua.create_function_mut(move |_, (keypress, action): (KeyPress, Action)| {
+    lua.globals().set("bind", lua.create_function_mut(move |_, (keypress, action, global): (KeyPress, Action, Option<bool>)| {
         let config = config_clone.clone();
         let mut guard = config.borrow_mut();
+        if let Some(true) = global {
+            guard.insert_lock_keypress(keypress.clone(), action.clone());
+        }
         guard.insert_keypress(keypress, action);
         Ok(())
     })?)?;
