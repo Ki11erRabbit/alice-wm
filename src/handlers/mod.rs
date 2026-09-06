@@ -68,3 +68,57 @@ delegate_data_device!(@<BackendData: Backend + 'static> Alice<BackendData>);
 
 impl<BackendData: Backend + 'static> OutputHandler for Alice<BackendData> {}
 delegate_output!(@<BackendData: Backend + 'static> Alice<BackendData>);
+
+//
+// Wp Viewporter & Wp Fractional Scale
+//
+// Together these give clients (notably Firefox/GTK) true fractional
+// scaling. Without `wp_fractional_scale_v1` a client only sees the
+// output's rounded-up *integer* `wl_output` scale, sizes its buffer for
+// that integer scale, and the compositor then composites it back down
+// using the real fractional scale — the two disagree, so the surface
+// ends up larger than its allotted logical space and spills off-screen.
+// `wp_viewporter` lets a client's buffer size and its displayed logical
+// size differ cleanly, which fractional scaling relies on.
+
+use smithay::{
+    delegate_fractional_scale, delegate_viewporter,
+    wayland::{
+        compositor::{get_parent, with_states},
+        fractional_scale::{with_fractional_scale, FractionalScaleHandler},
+    },
+};
+
+impl<BackendData: Backend + 'static> FractionalScaleHandler for Alice<BackendData> {
+    fn new_fractional_scale(&mut self, surface: WlSurface) {
+        // Pick a sensible initial scale for a surface that just bound the
+        // protocol: prefer the output backing the window this surface
+        // belongs to (walking up to the toplevel first, since this may be
+        // a subsurface/popup), falling back to the first output known to
+        // the compositor. Later frames correct this via
+        // `Alice::refresh_fractional_scale_for_output`, called once per
+        // rendered frame from both backends.
+        let mut root = surface.clone();
+        while let Some(parent) = get_parent(&root) {
+            root = parent;
+        }
+
+        let output = self
+            .window_registry
+            .find_by_surface(&root)
+            .and_then(|id| self.window_registry.get(&id))
+            .and_then(|info| self.space.outputs_for_element(&info.window).first().cloned())
+            .or_else(|| self.space.outputs().next().cloned());
+
+        if let Some(output) = output {
+            with_states(&surface, |states| {
+                with_fractional_scale(states, |fractional_scale| {
+                    fractional_scale.set_preferred_scale(output.current_scale().fractional_scale());
+                });
+            });
+        }
+    }
+}
+
+delegate_fractional_scale!(@<BackendData: Backend + 'static> Alice<BackendData>);
+delegate_viewporter!(@<BackendData: Backend + 'static> Alice<BackendData>);

@@ -91,18 +91,24 @@ impl Backend for WinitData {
         let display: Display<Alice<Self>> = Display::new()?;
         let display_handle = display.handle();
         let mut alice = Alice::new(backend_data, event_loop, display);
-        let position = alice.config.get_output_position(&output.name())
-            .map(|pos| (pos.x, pos.y))
-            .unwrap_or((0, 0));
+        let output_cfg = alice.config.get_output_position(&output.name());
+        let position = output_cfg.map(|pos| (pos.x, pos.y)).unwrap_or((0, 0));
+        // Same fractional-scale config lookup the udev backend already does
+        // in `connector_connected` — without this, the winit backend could
+        // never honor a configured non-1.0 scale at all (it always kept
+        // whatever `Scale::Integer(1)` was set at the top of this
+        // function), making it impossible to even exercise fractional
+        // scaling in the windowed/nested backend.
+        let scale = output_cfg.and_then(|cfg| cfg.scale).map(Scale::Fractional);
         // `change_current_state`'s location arg above was hardcoded to
         // (0, 0) since `alice.config` doesn't exist yet at that point in
-        // this function. Passing `None` for the other three arguments here
-        // leaves mode/transform/scale untouched (each is independently a
-        // no-op when `None`) and only updates location — keeping
+        // this function. Passing `None` for transform here leaves it
+        // untouched (each of these three args is independently a no-op
+        // when `None`) and only updates location and scale — keeping
         // `Output`'s own state, and therefore xdg-output, in sync with
         // wherever `Space` is about to place it below. See the longer
         // explanation of why this matters in udev.rs's `connector_connected`.
-        output.change_current_state(None, None, None, Some(position.into()));
+        output.change_current_state(None, None, scale, Some(position.into()));
         alice.space.map_output(&output, position);
         alice.outputs.insert(output.clone());
         output.create_global::<Alice<Self>>(&display_handle);
@@ -169,7 +175,7 @@ impl Backend for WinitData {
                                         renderer,
                                         lock_surface.wl_surface(),
                                         (0, 0),
-                                        1.0,
+                                        output_scale,
                                         1.0,
                                         Kind::Unspecified,
                                     ),
@@ -191,6 +197,10 @@ impl Backend for WinitData {
                                     output_scale,
                                 );
 
+                            // `render_output`'s 4th positional argument is
+                            // `alpha` (opacity), not scale — it reads the
+                            // output's real scale internally from `output`
+                            // itself, so `1.0` here is correct as-is.
                             smithay::desktop::space::render_output::<
                                 _,
                                 crate::cursor::PointerRenderElement<GlesRenderer>,
@@ -216,6 +226,8 @@ impl Backend for WinitData {
                         state.blanked_outputs.insert(output.clone());
                         state.try_lock();
                     }
+
+                    state.refresh_fractional_scale_for_output(&output);
 
                     state.space.elements().for_each(|window| {
                         window.send_frame(

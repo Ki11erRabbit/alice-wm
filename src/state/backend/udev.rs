@@ -955,9 +955,23 @@ fn output_space_elements<'a>(
     lock_surfaces: &HashMap<Output, LockSurface>,
     locked: bool,
 ) -> Result<Vec<UdevRenderElement<'a>>, OutputNoMode> {
+    // The output's real (possibly fractional) scale — e.g. `1.5` for a
+    // HiDPI panel configured with a fractional scale. `fullscreen_output_elements`
+    // and `render_lock_surfaces` (both defined further down in this file)
+    // take this as an explicit `scale: f64` parameter, and were being
+    // called with a hardcoded `1.0` regardless of the output's actual
+    // scale — every element in the fullscreen and locked-session paths
+    // was built sized/positioned as if the output were unscaled, while
+    // the real framebuffer is provisioned at the output's true (larger)
+    // physical resolution. (`space_render_elements` just below, by
+    // contrast, takes `alpha` as its fourth argument, not scale — it
+    // reads the output's real scale internally via `output.current_scale()`,
+    // so `1.0` there is correctly "fully opaque", not a scale bug.)
+    let scale = output.current_scale().fractional_scale();
+
     if !locked {
         if let Some(fs_window) = window_registry.fullscreen_window_for_output(&scope) {
-                fullscreen_output_elements(renderer, space, output, &fs_window, 1.0)
+                fullscreen_output_elements(renderer, space, output, &fs_window, scale)
             } else {
                 // `Space::render_elements_for_output` (the method) positions layer-shell
                 // elements using only the output's own location, never the position
@@ -971,10 +985,12 @@ fn output_space_elements<'a>(
                 // function; this is what winit's `render_output` already uses
                 // internally, which is why this backend didn't show the bug) builds the
                 // same element list but positions layers via `layer_geometry` correctly.
+                // Its fourth argument is `alpha` (opacity), not scale — see the comment
+                // above — so `1.0` here is correct as-is.
                 space_render_elements(renderer, [space], output, 1.0)
             }
     } else if let Some(surface) = lock_surfaces.get(output) {
-        render_lock_surfaces(renderer, output, surface, 1.0)
+        render_lock_surfaces(renderer, output, surface, scale)
     } else {
         Ok(Vec::new())
     }
@@ -1058,6 +1074,8 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
             eprintln!("render_frame failed on crtc {:?}: {:?}", crtc, err);
         }
     }
+
+    alice.refresh_fractional_scale_for_output(&output);
 
     alice.space.elements().for_each(|window| {
         window.send_frame(&output, alice.start_time.elapsed(), Some(Duration::ZERO), |_, _| {

@@ -89,6 +89,28 @@ impl<BackendData: Backend + 'static> XdgShellHandler for Alice<BackendData> {
             output,
             tag: focused_tag,
         }));
+
+        // `Space::refresh()` is what actually sends `wl_surface.enter`
+        // (and drives the `output_enter`/`output_leave` bookkeeping that
+        // our own `FractionalScaleHandler` piggybacks on for continuous
+        // updates) — but this compositor otherwise only calls it once per
+        // rendered frame, *after* that frame has already been composited
+        // and queued (see the end of `render_surface`/the `Redraw`
+        // handler). Left at its default timing, a brand-new window's
+        // very first configure — sent below, on its first commit, via
+        // `handle_commit` — would go out to the client before it has
+        // ever been told which output (and therefore which scale) it's
+        // on. Firefox in particular renders its first frame right away
+        // using whatever default scale it falls back to without that
+        // information, then only corrects itself once the (late) enter
+        // event finally arrives on the *next* frame — which is exactly
+        // the "only covers part of the screen, then fixes itself"
+        // symptom. Refreshing here, immediately after placing the window
+        // at its real, final position, makes sure `wl_surface.enter` (and
+        // the correct scale) reaches the client before its first
+        // configure/commit round-trip, instead of one frame late.
+        self.space.refresh();
+
         self.change_focus(id, window);
     }
 

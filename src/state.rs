@@ -8,7 +8,7 @@ use smithay::{
             Display, DisplayHandle, backend::{ClientData, ClientId, DisconnectReason}, protocol::{wl_output::WlOutput, wl_surface::WlSurface}
         }
     }, utils::{Logical, Point, SERIAL_COUNTER}, wayland::{
-        compositor::{CompositorClientState, CompositorState}, output::OutputManagerState, selection::data_device::DataDeviceState, session_lock::{LockSurface, SessionLockManagerState, SessionLocker}, shell::{wlr_layer::{self, WlrLayerShellState}, xdg::XdgShellState}, shm::ShmState, socket::ListeningSocketSource
+        compositor::{CompositorClientState, CompositorState}, fractional_scale::FractionalScaleManagerState, output::OutputManagerState, selection::data_device::DataDeviceState, session_lock::{LockSurface, SessionLockManagerState, SessionLocker}, shell::{wlr_layer::{self, WlrLayerShellState}, xdg::XdgShellState}, shm::ShmState, socket::ListeningSocketSource, viewporter::ViewporterState
     }
 };
 
@@ -50,6 +50,26 @@ pub struct Alice<BackendData: Backend + 'static> {
     pub data_device_state: DataDeviceState,
     pub popups: PopupManager,
 
+    /// `wp_viewporter` — lets clients (and our own fractional-scale
+    /// handling below) present a surface at a destination size/region
+    /// that differs from its buffer size, without the buffer itself
+    /// needing to be an exact multiple of the output scale. This is a
+    /// prerequisite for artifact-free fractional scaling: without it, a
+    /// client scaling e.g. a 100x100 logical surface by 1.5 has to submit
+    /// a 150x150 buffer, which then needs viewporter to be displayed at
+    /// its intended logical size on outputs with a *different* scale.
+    pub viewporter_state: ViewporterState,
+    /// `wp_fractional_scale_v1` — tells supporting clients (e.g. Firefox)
+    /// the output's *exact* fractional scale (1.5, 1.25, ...) instead of
+    /// making them infer it from the integer `wl_output` scale, which is
+    /// always rounded **up** (see `Scale::Fractional`'s docs). Without
+    /// this, a client at a 1.5x output sees an advertised integer scale
+    /// of 2, renders its buffer assuming 2x, and the compositor then
+    /// composites that buffer back down using the real 1.5x scale — the
+    /// buffer and the destination logical size no longer agree, so the
+    /// surface renders oversized and spills past the output's edges.
+    pub fractional_scale_manager_state: FractionalScaleManagerState,
+
     pub seat: Seat<Self>,
 
     /// What the pointer cursor should currently look like, as last reported
@@ -74,6 +94,8 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let mut seat_state = SeatState::new();
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let popups = PopupManager::default();
+        let viewporter_state = ViewporterState::new::<Self>(&dh);
+        let fractional_scale_manager_state = FractionalScaleManagerState::new::<Self>(&dh);
 
         // A seat is a group of keyboards, pointer and touch devices.
         // A seat typically has a pointer and maintains a keyboard focus and a pointer focus.
@@ -139,6 +161,8 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             seat_state,
             data_device_state,
             popups,
+            viewporter_state,
+            fractional_scale_manager_state,
             seat,
 
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
@@ -247,6 +271,44 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                  see WAYLAND_DISPLAY/XDG_CURRENT_DESKTOP. Is dbus installed \
                  and on PATH?"
             ),
+        }
+    }
+
+    /// Tells every mapped window's and layer-surface's `wp_fractional_scale`
+    /// object (if the client created one) what `output`'s *exact*
+    /// fractional scale currently is. Called once per rendered frame per
+    /// output (see the `send_frame` loops in `render_surface`/`Redraw`),
+    /// mirroring how those same call sites already keep frame callbacks
+    /// current — the fractional scale needs the same continuous upkeep,
+    /// since it can change whenever the output's configured scale changes
+    /// or a window/layer moves onto a different output.
+    ///
+    /// This is a simplified stand-in for Smithay's `primary_scanout_output`
+    /// tracking (see `anvil`'s `post_repaint`): it updates every window
+    /// unconditionally rather than only those actually scanned out on
+    /// `output`, matching the simplification the existing `send_frame`
+    /// loops already make in this compositor.
+    pub fn refresh_fractional_scale_for_output(&self, output: &Output) {
+        let scale = output.current_scale().fractional_scale();
+
+        self.space.elements().for_each(|window| {
+            window.with_surfaces(|_, states| {
+                smithay::wayland::fractional_scale::with_fractional_scale(states, |fractional_scale| {
+                    fractional_scale.set_preferred_scale(scale);
+                });
+            });
+        });
+
+        if let Some(id) = self.outputs.get(&output.name()).map(|info| info.id) {
+            if let Some(layers) = self.layer_surfaces.get(&id) {
+                for layer in layers {
+                    layer.surface.with_surfaces(|_, states| {
+                        smithay::wayland::fractional_scale::with_fractional_scale(states, |fractional_scale| {
+                            fractional_scale.set_preferred_scale(scale);
+                        });
+                    });
+                }
+            }
         }
     }
 
