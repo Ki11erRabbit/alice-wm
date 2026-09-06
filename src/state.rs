@@ -12,7 +12,7 @@ use smithay::{
     }
 };
 
-use crate::{CalloopData, config::{Action, Config, KeyPress, execute_lua_config}, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputId, OutputInfo, Outputs, TagId}, state::backend::{Backend, udev::UdevData, winit::WinitData}, window::{LayoutInfo, WindowId, WindowRegistry}};
+use crate::{CalloopData, config::{Action, Config, KeyPress, execute_lua_config}, handlers::workspace::WorkspaceManagerState, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputId, OutputInfo, Outputs, TagId}, state::backend::{Backend, udev::UdevData, winit::WinitData}, window::{LayoutInfo, WindowId, WindowRegistry}};
 
 pub struct Alice<BackendData: Backend + 'static> {
     pub backend_data: BackendData,
@@ -30,6 +30,10 @@ pub struct Alice<BackendData: Backend + 'static> {
 
     pub layer_surfaces: LayerRegistry,
     pub layer_shell_state: WlrLayerShellState,
+
+    /// Exposes our tag system to `ext-workspace-v1` clients (waybar's
+    /// `ext/workspaces` module, noctalia, etc). See `handlers/workspace.rs`.
+    pub workspace_manager: WorkspaceManagerState,
 
     pub config: Config,
     pub done_autostart: bool,
@@ -126,6 +130,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let layer_shell_state = WlrLayerShellState::new::<Alice<BackendData>>(&dh);
 
         let session_lock_manager_state = SessionLockManagerState::new::<Alice<BackendData>, _>(&dh, |_client| true);
+        let workspace_manager = WorkspaceManagerState::new::<BackendData>(&dh);
 
         let mut out = Self {
             backend_data: backend,
@@ -143,6 +148,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
             layer_surfaces: LayerRegistry::new(),
             layer_shell_state,
+            workspace_manager,
 
             config,
             done_autostart: false,
@@ -1078,6 +1084,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         }
 
         self.relayout(Some(LayoutScope { output, tag }));
+        self.broadcast_workspace_state();
         Some(())
     }
 

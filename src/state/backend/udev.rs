@@ -825,7 +825,8 @@ fn connector_connected(
 
     alice.space.map_output(&output, position);
     output.create_global::<Alice<UdevData>>(&alice.display_handle);
-    alice.outputs.insert(output.clone());
+    let output_id = alice.outputs.insert(output.clone());
+    alice.workspace_output_added(output_id);
     output.user_data().insert_if_missing(|| (node, crtc));
 
     let Some(backend) = alice.backend_data.backends.get_mut(&node) else {
@@ -876,6 +877,9 @@ fn connector_disconnected(alice: &mut Alice<UdevData>, node: DrmNode, _connector
         return;
     };
 
+    if let Some(id) = alice.outputs.get(&surface.output.name()).map(|info| info.id) {
+        alice.workspace_output_removed(id);
+    }
     alice.outputs.deactivate(&surface.output.name());
     alice.space.unmap_output(&surface.output);
 }
@@ -883,6 +887,9 @@ fn connector_disconnected(alice: &mut Alice<UdevData>, node: DrmNode, _connector
 pub fn device_removed(alice: &mut Alice<UdevData>, node: DrmNode) {
     if let Some(backend) = alice.backend_data.backends.remove(&node) {
         for (_, surface) in backend.surfaces {
+            if let Some(id) = alice.outputs.get(&surface.output.name()).map(|info| info.id) {
+                alice.workspace_output_removed(id);
+            }
             alice.outputs.deactivate(&surface.output.name());
             alice.space.unmap_output(&surface.output);
         }

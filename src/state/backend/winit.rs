@@ -110,8 +110,13 @@ impl Backend for WinitData {
         // explanation of why this matters in udev.rs's `connector_connected`.
         output.change_current_state(None, None, scale, Some(position.into()));
         alice.space.map_output(&output, position);
-        alice.outputs.insert(output.clone());
+        let output_id = alice.outputs.insert(output.clone());
         output.create_global::<Alice<Self>>(&display_handle);
+        // No bound ext_workspace_manager_v1 clients yet at this point in
+        // startup (this runs before the socket is even live to most
+        // clients), but this keeps the winit and udev backends symmetric
+        // and costs nothing if `instances` is empty.
+        alice.workspace_output_added(output_id);
 
         // TODO(screencopy): SCREENCOPY_VERSION currently lives in the
         // dispatch module (e.g. `crate::handlers::screencopy`) — adjust the

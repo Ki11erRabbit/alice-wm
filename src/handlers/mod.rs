@@ -3,6 +3,11 @@ mod xdg_shell;
 mod wlr_shell;
 mod capture;
 mod lock;
+// `pub` (unlike the above): `Alice::new` in state.rs needs to name
+// `WorkspaceManagerState` as a field type, and state.rs isn't a descendant
+// of this module, so a private `mod workspace;` wouldn't be reachable from
+// there.
+pub mod workspace;
 
 use crate::Alice;
 use crate::state::backend::Backend;
