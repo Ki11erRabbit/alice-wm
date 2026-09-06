@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use smithay::output::Output;
 
-use crate::layout::{Layout, MasterStack};
+use crate::layout::{Fibonacci, Layout, MasterStack};
 
 
 
@@ -139,6 +139,8 @@ impl LayoutRegistry {
         let master_stack = MasterStack;
         let default_layout = master_stack.name().to_string();
         available.insert(master_stack.name(), Box::new(master_stack) as Box<dyn Layout>);
+        let fib = Fibonacci;
+        available.insert(fib.name(), Box::new(fib) as Box<dyn Layout>);
 
         Self {
             available,

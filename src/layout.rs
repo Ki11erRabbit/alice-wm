@@ -106,4 +106,142 @@ impl Layout for MasterStack {
     }
 }
 
+pub struct Fibonacci;
 
+impl Layout for Fibonacci {
+    fn name(&self) -> &'static str {
+        "Fibonacci"
+    }
+
+    fn arrange_horizontal(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect> {
+        let mut out = Vec::with_capacity(windows.len());
+        fib(Phase::Right, area, windows.len(), gap_size, &mut out);
+        out
+    }
+
+    fn arrange_vertical(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect> {
+        let mut out = Vec::with_capacity(windows.len());
+        fib(Phase::Down, area, windows.len(), gap_size, &mut out);
+        out
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Phase {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+impl Phase {
+    fn next(self) -> Self {
+        match self {
+            Self::Right=> Self::Down,
+            Self::Down => Self::Left,
+            Self::Left => Self::Up,
+            Self::Up => Self::Right,
+        }
+    }
+}
+
+
+fn fib(
+    phase: Phase,
+    area: Rect,
+    n: usize,
+    gap_size: i32,
+    out: &mut Vec<Rect>,
+) {
+    if n == 0 {
+        return;
+    } else if n == 1 {
+        out.push(area);
+        return;
+    }
+    const RATIO: f64 = 0.618;
+
+    let (placed, rest) = match phase {
+        Phase::Right => {
+            let first_width = (area.width as f64 * RATIO).round() as i32 - gap_size;
+            let second_width = area.width - first_width - gap_size;
+
+            let first_rect = Rect {
+                x: area.x,
+                y: area.y,
+                width: first_width,
+                height: area.height,
+            };
+
+            let rest_rect = Rect {
+                x: area.x + first_rect.width + gap_size,
+                y: area.y,
+                width: second_width,
+                height: area.height,
+            };
+
+            (first_rect, rest_rect)
+        }
+        Phase::Down => {
+            let first_height = (area.height as f64 * RATIO).round() as i32 - gap_size;
+            let second_height = area.height - first_height - gap_size;
+
+            let first_rect = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: first_height,
+            };
+
+            let rest_rect = Rect {
+                x: area.x,
+                y: area.y + first_rect.height + gap_size,
+                width: area.width,
+                height: second_height,
+            };
+
+            (first_rect, rest_rect)
+        }
+        Phase::Left => {
+            let first_width = (area.width as f64 * RATIO).round() as i32 - gap_size;
+            let second_width = area.width - first_width - gap_size;
+
+            let first_rect = Rect {
+                x: area.x,
+                y: area.y,
+                width: first_width,
+                height: area.height,
+            };
+
+            let rest_rect = Rect {
+                x: area.x + first_rect.width + gap_size,
+                y: area.y,
+                width: second_width,
+                height: area.height,
+            };
+
+            (rest_rect, first_rect)
+        }
+        Phase::Up => {
+            let first_height = (area.height as f64 * RATIO).round() as i32 - gap_size;
+            let second_height = area.height - first_height - gap_size;
+
+            let first_rect = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: first_height,
+            };
+
+            let rest_rect = Rect {
+                x: area.x,
+                y: area.y + first_rect.height + gap_size,
+                width: area.width,
+                height: second_height,
+            };
+            (rest_rect, first_rect)
+        }
+    };
+    out.push(placed);
+
+    fib(phase.next(), rest, n - 1, gap_size, out);
+}
