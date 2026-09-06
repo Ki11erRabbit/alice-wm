@@ -193,7 +193,7 @@ pub fn handle_commit<BackendData: Backend + 'static>(state: &mut Alice<BackendDa
             .keyboard_interactivity
     });
 
-    if keyboard_interactivity == KeyboardInteractivity::Exclusive {
+    if keyboard_interactivity == KeyboardInteractivity::Exclusive && !state.locked {
         if let Some(keyboard) = state.seat.get_keyboard() {
             if keyboard.current_focus().as_ref() != Some(surface) {
                 let serial = SERIAL_COUNTER.next_serial();

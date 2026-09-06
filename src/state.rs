@@ -315,7 +315,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         };
 
         if self.locked && let Some(surface) = self.lock_surfaces.get(&output) {
-            return Some((surface.wl_surface().clone(), pos))
+            return Some((surface.wl_surface().clone(), output_loc))
         }
 
         // Overlay and Top surfaces (bars, launchers, notifications) sit above windows.
@@ -1293,6 +1293,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             .all(|o| self.blanked_outputs.contains(o));
 
         if all_blanked {
+            eprintln!("try_lock: confirming");
             let Some(confirmation) = self.pending_locker.take() else {
                 return;
             };
@@ -1321,7 +1322,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             .map(|toplevel| toplevel.wl_surface().clone());
 
         keyboard.set_focus(self, focus_target, serial);
-
+        BackendData::schedule_render(self);
     }
 }
 

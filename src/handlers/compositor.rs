@@ -3,13 +3,12 @@ use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_shm,
     reexports::wayland_server::{
-        protocol::{wl_buffer, wl_surface::WlSurface},
-        Client,
+        Client, protocol::{wl_buffer, wl_surface::WlSurface}
     },
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            get_parent, is_sync_subsurface, CompositorClientState, CompositorHandler, CompositorState,
+            self, CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes, get_parent, is_sync_subsurface
         },
         shm::{ShmHandler, ShmState},
     },
@@ -28,6 +27,14 @@ impl<BackendData: Backend + 'static> CompositorHandler for Alice<BackendData> {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
+        if self.lock_surfaces.values().any(|ls| ls.wl_surface() == surface) {
+        eprintln!(
+            "commit: lock surface, has_buffer={}",
+            compositor::with_states(surface, |states| {
+                states.cached_state.get::<SurfaceAttributes>().current().buffer.is_some()
+            })
+        );
+    }
         on_commit_buffer_handler::<Self>(surface);
 
         // Resolved once via the O(1) surface index and reused below, instead

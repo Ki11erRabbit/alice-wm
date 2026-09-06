@@ -304,6 +304,7 @@ impl Backend for UdevData {
                     .collect::<Vec<_>>()
             })
             .collect();
+        eprintln!("schedule_render: {} targets", targets.len());
         for (node, crtc) in targets {
             render_surface(alice, node, crtc);
         }
@@ -364,7 +365,7 @@ impl Backend for UdevData {
         let scope = output_scope(&alice.outputs, output).ok_or("no LayoutScope for output")?;
 
         let space_elements =
-            output_space_elements(&mut renderer, &alice.space, &alice.window_registry, output, scope, &alice.lock_surfaces)
+            output_space_elements(&mut renderer, &alice.space, &alice.window_registry, output, scope, &alice.lock_surfaces, alice.locked)
                 .map_err(|e| format!("failed to gather render elements: {e:?}"))?;
 
         let mut elements: Vec<UdevFrameRenderElement<'_>> =
@@ -952,25 +953,30 @@ fn output_space_elements<'a>(
     output: &Output,
     scope: LayoutScope,
     lock_surfaces: &HashMap<Output, LockSurface>,
+    locked: bool,
 ) -> Result<Vec<UdevRenderElement<'a>>, OutputNoMode> {
-    if let Some(surface) = lock_surfaces.get(output) {
+    if !locked {
+        if let Some(fs_window) = window_registry.fullscreen_window_for_output(&scope) {
+                fullscreen_output_elements(renderer, space, output, &fs_window, 1.0)
+            } else {
+                // `Space::render_elements_for_output` (the method) positions layer-shell
+                // elements using only the output's own location, never the position
+                // `LayerMap::arrange` actually computed for them (`layer_geometry`) — so
+                // every layer surface (panels, bars, launchers) renders pinned near its
+                // own local (0, 0) regardless of anchor/centering, while hit-testing
+                // (which does read `layer_geometry` — see `Alice::layer_under` /
+                // `surface_under`) reports the correct arranged position. The visible
+                // result is a bar stuck in a corner whose click target is wherever it
+                // was actually supposed to be. `space_render_elements` (the free
+                // function; this is what winit's `render_output` already uses
+                // internally, which is why this backend didn't show the bug) builds the
+                // same element list but positions layers via `layer_geometry` correctly.
+                space_render_elements(renderer, [space], output, 1.0)
+            }
+    } else if let Some(surface) = lock_surfaces.get(output) {
         render_lock_surfaces(renderer, output, surface, 1.0)
-    } else if let Some(fs_window) = window_registry.fullscreen_window_for_output(&scope) {
-        fullscreen_output_elements(renderer, space, output, &fs_window, 1.0)
     } else {
-        // `Space::render_elements_for_output` (the method) positions layer-shell
-        // elements using only the output's own location, never the position
-        // `LayerMap::arrange` actually computed for them (`layer_geometry`) — so
-        // every layer surface (panels, bars, launchers) renders pinned near its
-        // own local (0, 0) regardless of anchor/centering, while hit-testing
-        // (which does read `layer_geometry` — see `Alice::layer_under` /
-        // `surface_under`) reports the correct arranged position. The visible
-        // result is a bar stuck in a corner whose click target is wherever it
-        // was actually supposed to be. `space_render_elements` (the free
-        // function; this is what winit's `render_output` already uses
-        // internally, which is why this backend didn't show the bug) builds the
-        // same element list but positions layers via `layer_geometry` correctly.
-        space_render_elements(renderer, [space], output, 1.0)
+        Ok(Vec::new())
     }
 }
 
@@ -1006,6 +1012,7 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         &output,
         scope,
         &alice.lock_surfaces,
+        alice.locked,
     ) {
         Ok(elements) => elements,
         Err(err) => {
@@ -1065,6 +1072,15 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
                 });
             }
         }
+    }
+    if let Some(lock_surface) = alice.lock_surfaces.get(&output) {
+        smithay::desktop::utils::send_frames_surface_tree(
+            lock_surface.wl_surface(),
+            &output,
+            alice.start_time.elapsed(),
+            Some(Duration::ZERO),
+            |_, _| Some(output.clone()),
+        );
     }
 
     alice.space.refresh();
@@ -1135,15 +1151,16 @@ fn render_lock_surfaces<'a>(
             1.0,
         ));
     }
-
-    elements.extend(render_elements_from_surface_tree(
+    let new_elements = render_elements_from_surface_tree(
         renderer,
         lock_surface.wl_surface(),
         (0, 0),
         scale,
         1.0,
         Kind::Unspecified,
-    ));
+    );
+    eprintln!("render_lock_surfaces: {} elements", elements.len());
+    elements.extend(new_elements);
 
     Ok(elements)
 }

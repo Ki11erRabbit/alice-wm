@@ -2,11 +2,6 @@ use smithay::{delegate_session_lock, output::Output, utils::SERIAL_COUNTER, wayl
 
 use crate::{Alice, state::backend::Backend};
 
-
-
-
-
-
 impl<BackendData: Backend + 'static> SessionLockHandler for Alice<BackendData> {
     fn lock_state(&mut self) -> &mut smithay::wayland::session_lock::SessionLockManagerState {
          &mut self.session_lock_manager_state
@@ -16,6 +11,7 @@ impl<BackendData: Backend + 'static> SessionLockHandler for Alice<BackendData> {
         self.locked = true;
         self.pending_locker = Some(confirmation);
         self.try_lock();
+        BackendData::schedule_render(self);
     }
 
     fn unlock(&mut self) {
@@ -26,6 +22,15 @@ impl<BackendData: Backend + 'static> SessionLockHandler for Alice<BackendData> {
         let Some(output) = Output::from_resource(&output) else {
             return
         };
+
+        if let Some(geo) = self.space.output_geometry(&output) {
+            let size = geo.size;
+            surface.with_pending_state(|state| {
+                state.size = Some((size.w as u32, size.h as u32).into());
+            });
+            surface.send_configure();
+        }
+
         self.lock_surfaces.insert(output.clone(), surface.clone());
         if !self.locked {
             return
@@ -41,6 +46,7 @@ impl<BackendData: Backend + 'static> SessionLockHandler for Alice<BackendData> {
                 .set_focus(self, Some(surface.wl_surface().clone()), serial);
             self.lock_focus_output = Some(output);
         }
+        BackendData::schedule_render(self);
     }
 }
 
