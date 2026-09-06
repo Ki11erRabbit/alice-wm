@@ -530,7 +530,11 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         }
 
         let layout = self.layout_registry.get_layout(&scope);
-        let rects = layout.arrange(area, &windows, self.config.gap_size());
+        let rects = if area.width >= area.height {
+            layout.arrange_horizontal(area, &windows, self.config.gap_size())
+        } else {
+            layout.arrange_vertical(area, &windows, self.config.gap_size())
+        };
         //,eprintln!("relayout_single: area={:?} windows={} rects={:?}", area, windows.len(), rects);
 
         for (id, rect) in windows.iter().zip(rects) {

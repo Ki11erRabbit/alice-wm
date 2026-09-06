@@ -13,7 +13,8 @@ pub struct Rect {
 
 pub trait Layout {
     fn name(&self) -> &'static str;
-    fn arrange(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect>;
+    fn arrange_horizontal(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect>;
+    fn arrange_vertical(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect>;
 }
 
 
@@ -24,7 +25,7 @@ impl Layout for MasterStack {
         "MasterStack"
     }
 
-    fn arrange(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect> {
+    fn arrange_horizontal(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect> {
         if windows.is_empty() {
             return Vec::new();
         }
@@ -58,6 +59,46 @@ impl Layout for MasterStack {
         for i in 1..stack.len() {
             stack[i].y = stack[i - 1].y + stack[i - 1].height + gap_size;
             stack[i].height = stack[i].height.saturating_sub(gap_size);
+        }
+        out.extend(stack);
+
+        out
+    }
+
+    fn arrange_vertical(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect> {
+        if windows.is_empty() {
+            return Vec::new();
+        }
+        if windows.len() == 1 {
+            return vec![area];
+        }
+        let main_rect = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: (area.height / 2).saturating_sub(gap_size),
+        };
+        let remaining_rect = Rect {
+            x: area.x,
+            y: main_rect.height + main_rect.y + gap_size,
+            width: area.width,
+            height: area.height.saturating_sub(main_rect.height + gap_size),
+        };
+        let mut out = Vec::with_capacity(windows.len());
+        out.push(main_rect);
+
+        let part_size = area.width / (windows.len() - 1) as i32; // Skipping first window
+        let stack_rect = Rect {
+            x: remaining_rect.x,
+            y: remaining_rect.y,
+            width: part_size,
+            height: remaining_rect.height,
+        };
+        let mut stack = vec![stack_rect; windows.len() - 1];
+
+        for i in 1..stack.len() {
+            stack[i].x = stack[i - 1].x + stack[i - 1].width + gap_size;
+            stack[i].width = stack[i].width.saturating_sub(gap_size);
         }
         out.extend(stack);
 
