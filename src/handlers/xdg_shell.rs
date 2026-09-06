@@ -81,6 +81,7 @@ impl<BackendData: Backend + 'static> XdgShellHandler for Alice<BackendData> {
         let window = Window::new_wayland_window(surface);
 
         let id = self.window_registry.insert(WindowInfo::new(focused_tag, info.id, window.clone(), floating));
+        self.broadcast_workspace_state();
 
         self.space.map_element(window.clone(), (0, 0), true);
         self.undo_all_fullscreen();

@@ -11,13 +11,15 @@
 //! Since each output here focuses exactly one tag at a time (see
 //! `Outputs::focused_tag`), this is a much simpler mapping than a
 //! multi-tag-view system like river or awesomewm: `active` just tracks
-//! `Outputs::get_focused_tag`, one workspace at a time per group. We never
-//! set the `hidden` bit — all 9 tags should always be visible/selectable in
-//! a bar, not just occupied ones, which is the behaviour tag-based bar
-//! modules (e.g. waybar's `river/tags`) expect, as opposed to i3/sway's
-//! "only show workspaces that exist" convention. `urgent` isn't wired up
-//! yet since this compositor has no notion of window urgency/attention
-//! requests at all; if that's added later, set it here too.
+//! `Outputs::get_focused_tag`, one workspace at a time per group.
+//! `hidden` doubles as an occupancy signal (see `workspace_state`) since
+//! the protocol has no dedicated bit for that — set for any inactive,
+//! window-less tag, so bars that key off it (waybar's `ignore-hidden`,
+//! noctalia's `empty_color`) can tell empty tags apart from occupied
+//! ones, while all 9 tags stay individually selectable regardless.
+//! `urgent` isn't wired up yet since this compositor has no notion of
+//! window urgency/attention requests at all; if that's added later, set
+//! it here too.
 
 use std::collections::HashMap;
 
@@ -39,7 +41,7 @@ use smithay::{
 };
 
 use crate::{
-    output::{OutputId, Outputs, TagId},
+    output::{LayoutScope, OutputId, Outputs, TagId},
     state::backend::Backend,
     window::WindowRegistry,
     Alice,
@@ -120,13 +122,27 @@ impl WorkspaceManagerState {
     }
 }
 
+/// `active` mirrors `Outputs::get_focused_tag` — one workspace at a time
+/// per group, since this compositor only ever views one tag per output.
+/// `hidden` doubles as "occupied" here: the protocol has no dedicated
+/// occupancy bit, but `hidden` is the conventional signal bars key off for
+/// exactly this (e.g. waybar's `ignore-hidden`, noctalia's
+/// `empty_color`/`occupied_color`) — so we set it for any tag that's both
+/// not currently active *and* has no windows on this output. An active
+/// tag is never marked hidden even if it happens to be empty, since it's
+/// inherently in view regardless of occupancy.
 fn workspace_state(outputs: &Outputs, window_registry: &WindowRegistry, output: OutputId, tag: TagId) -> WsState {
-    let _ = window_registry; // reserved: hook `urgent` in here once windows can request attention
-    if outputs.get_focused_tag(output) == Some(tag) {
-        WsState::Active
-    } else {
-        WsState::empty()
+    let active = outputs.get_focused_tag(output) == Some(tag);
+    let occupied = window_registry.filter(&LayoutScope { output, tag }).next().is_some();
+
+    let mut state = WsState::empty();
+    if active {
+        state |= WsState::Active;
     }
+    if !active && !occupied {
+        state |= WsState::Hidden;
+    }
+    state
 }
 
 /// Push every group/workspace this `manager` instance should know about for

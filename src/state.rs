@@ -908,6 +908,9 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         self.window_registry.remove(id);
         self.space.unmap_elem(&window);
+        // Occupancy just changed for whichever tag this window was on —
+        // update before any of the focus-handling paths below return early.
+        self.broadcast_workspace_state();
 
         if !was_focused {
             return;
