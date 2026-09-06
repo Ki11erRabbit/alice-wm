@@ -66,8 +66,39 @@ pub struct WorkspaceUserData {
 
 struct BoundInstance {
     manager: ExtWorkspaceManagerV1,
-    groups: HashMap<OutputId, ExtWorkspaceGroupHandleV1>,
+    groups: HashMap<OutputId, GroupEntry>,
     workspaces: HashMap<(OutputId, TagId), ExtWorkspaceHandleV1>,
+}
+
+struct GroupEntry {
+    handle: ExtWorkspaceGroupHandleV1,
+    /// Whether `output_enter` has actually been sent for this group yet.
+    /// A client is free to bind `wl_output` for this output *after*
+    /// binding `ext_workspace_manager_v1` (there's no ordering guarantee
+    /// between two independent globals), so we can't assume
+    /// `Output::client_outputs` will find anything at group-creation time
+    /// — this tracks "still owed an output_enter" so we can retry later
+    /// once the client catches up.
+    entered_output: bool,
+}
+
+/// Retry `output_enter` for any group of this instance that hasn't gotten
+/// one yet. Cheap no-op once every group has caught up. Call this
+/// anywhere we're already about to talk to the client (broadcasts, the
+/// manager's `commit` request), since we have no direct hook for "client
+/// just bound a new wl_output" to react to immediately.
+fn sync_group_outputs(outputs: &Outputs, instance: &mut BoundInstance) {
+    let Some(client) = instance.manager.client() else { return };
+    for (&output_id, group) in &mut instance.groups {
+        if group.entered_output {
+            continue;
+        }
+        let output = &outputs.get_id(output_id).output;
+        if let Some(wl_output) = output.client_outputs(&client).next() {
+            group.handle.output_enter(&wl_output);
+            group.entered_output = true;
+        }
+    }
 }
 
 pub struct WorkspaceManagerState {
@@ -126,8 +157,15 @@ fn announce_output<BackendData: Backend + 'static>(
     manager.workspace_group(&group);
     group.capabilities(GroupCapabilities::empty());
 
-    if let Some(wl_output) = output.client_outputs(client).next() {
+    // Attach the group to a `wl_output` if this client already happens to
+    // have one bound for it — but don't gate *creating the group and its
+    // workspaces* on that. If it's not available yet, `sync_group_outputs`
+    // will retry later; see `GroupEntry::entered_output`.
+    let entered_output = if let Some(wl_output) = output.client_outputs(client).next() {
         group.output_enter(&wl_output);
+        true
+    } else {
+        false
     };
 
     for i in 0..NUM_TAGS {
@@ -147,7 +185,7 @@ fn announce_output<BackendData: Backend + 'static>(
         instance.workspaces.insert((output_id, tag), ws);
     }
 
-    instance.groups.insert(output_id, group);
+    instance.groups.insert(output_id, GroupEntry { handle: group, entered_output });
 }
 
 impl<BackendData: Backend + 'static> Alice<BackendData> {
@@ -156,7 +194,8 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
     /// changes which tag is focused on an output, or which tags have
     /// windows (once `urgent`/occupancy gets wired in).
     pub fn broadcast_workspace_state(&mut self) {
-        for instance in &self.workspace_manager.instances {
+        for instance in &mut self.workspace_manager.instances {
+            sync_group_outputs(&self.outputs, instance);
             for (&(output, tag), ws) in &instance.workspaces {
                 ws.state(workspace_state(&self.outputs, &self.window_registry, output, tag));
             }
@@ -203,11 +242,11 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 .collect();
             for key in stale {
                 if let Some(ws) = instance.workspaces.remove(&key) {
-                    group.workspace_leave(&ws);
+                    group.handle.workspace_leave(&ws);
                     ws.removed();
                 }
             }
-            group.removed();
+            group.handle.removed();
             instance.manager.done();
         }
     }
@@ -260,7 +299,7 @@ impl<BackendData: Backend + 'static> Dispatch<ExtWorkspaceManagerV1, ManagerUser
     for Alice<BackendData>
 {
     fn request(
-        _state: &mut Alice<BackendData>,
+        state: &mut Alice<BackendData>,
         _client: &Client,
         manager: &ExtWorkspaceManagerV1,
         request: ext_workspace_manager_v1::Request,
@@ -269,7 +308,23 @@ impl<BackendData: Backend + 'static> Dispatch<ExtWorkspaceManagerV1, ManagerUser
         _data_init: &mut DataInit<'_, Alice<BackendData>>,
     ) {
         match request {
-            ext_workspace_manager_v1::Request::Commit => {}
+            ext_workspace_manager_v1::Request::Commit => {
+                // Some clients send `commit` once they've processed our
+                // initial batch, which by then typically means they've
+                // also finished binding whatever else they wanted
+                // (including wl_output) — a convenient point to retry any
+                // output_enter we couldn't send earlier. Harmless no-op if
+                // there's nothing left to catch up on.
+                if let Some(instance) = state
+                    .workspace_manager
+                    .instances
+                    .iter_mut()
+                    .find(|i| i.manager.id() == manager.id())
+                {
+                    sync_group_outputs(&state.outputs, instance);
+                    instance.manager.done();
+                }
+            }
             ext_workspace_manager_v1::Request::Stop => {
                 manager.finished();
             }
