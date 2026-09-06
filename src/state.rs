@@ -996,8 +996,24 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         let new_focus = self.window_registry
             .get_stack_mut(&LayoutScope { output, tag })
-            .and_then(|s| s.focused());
-        self.window_registry.change_focus(new_focus);
+            .and_then(|s| s.focused())
+            .and_then(|wid| self.window_registry.get(&wid).map(|info| (wid, info.window.clone())));
+
+        match new_focus {
+            Some((wid, window)) => {
+                // Actually hand keyboard focus to the window, not just update
+                // the registry's bookkeeping (see `Alice::change_focus` vs
+                // `WindowRegistry::change_focus` — the latter only sets an
+                // internal id and never touches the seat).
+                self.change_focus(wid, window);
+            }
+            None => {
+                self.window_registry.change_focus(None);
+                let keyboard = self.seat.get_keyboard().unwrap();
+                let serial = SERIAL_COUNTER.next_serial();
+                keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+            }
+        }
 
         self.relayout(Some(LayoutScope { output, tag }));
         Some(())
