@@ -22,7 +22,7 @@ use crate::{CalloopData, animation::{Animation, MorphFinish, ScaledElement, TagS
 /// `Action::MoveToTag` for where this applies. `focus_next_tag` and
 /// friends don't use this: they already know which way they're going.
 fn tag_direction(from: TagId, to: TagId) -> i32 {
-    if to.0 < from.0 { 1 } else { -1 }
+    if to.0 < from.0 { -1 } else { 1 }
 }
 
 pub struct Alice<BackendData: Backend + 'static> {
