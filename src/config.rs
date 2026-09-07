@@ -509,6 +509,19 @@ impl Default for Config {
         gesture_map.insert((3, GestureDirection::Left), Action::FocusNextTag);
         gesture_map.insert((3, GestureDirection::Right), Action::FocusPreviousTag);
 
+        // Default 4-finger touchpad gestures: send the focused window to
+        // the neighboring output in the same direction as the swipe,
+        // same one-to-one treatment as the 3-finger gestures above (see
+        // `gesture.rs`'s `ResolvedKind::Output`). Unlike the 3-finger
+        // left/right case, this one doesn't need a "swipe left brings
+        // the thing on the right into view" mental flip — an output
+        // really does sit to the left/right/up/down of the current one,
+        // so the swipe direction and the move direction match directly.
+        gesture_map.insert((4, GestureDirection::Left), Action::MoveOutputLeft);
+        gesture_map.insert((4, GestureDirection::Right), Action::MoveOutputRight);
+        gesture_map.insert((4, GestureDirection::Up), Action::MoveOutputUp);
+        gesture_map.insert((4, GestureDirection::Down), Action::MoveOutputDown);
+
         Self {
             map,
             lock_map: HashMap::new(),
@@ -726,14 +739,20 @@ fn load_config(use_alt: bool, file_text: &str) -> mlua::Result<Config> {
     // swipe to an action, e.g.:
     //   gesture(3, Direction.up, Action.move_up_stack())
     //   gesture(3, Direction.left, Action.focus_next_tag())
+    //   gesture(4, Direction.right, Action.move_output_right())
     // `direction` is one of `Direction.up`/`.down`/`.left`/`.right`.
-    // Bound to `Action.move_up_stack()`/`move_down_stack()` or
-    // `focus_next_tag()`/`focus_previous_tag()` — the same actions that
-    // already animate from a keybinding — the swipe drives that
-    // animation 1:1 with the finger instead of firing it outright; any
-    // other action just fires once, on release, like a key press. Only
-    // one action can be bound per `(fingers, direction)` pair; binding
-    // again overwrites it, same as `bind`.
+    // `fingers` can be any count — 4-finger swiping to send the focused
+    // window to another output is bound by default (see `gesture_map`'s
+    // defaults in `Config::default`), but any finger count can be
+    // (re)bound to any action here. Bound to `Action.move_up_stack()`/
+    // `move_down_stack()`, `focus_next_tag()`/`focus_previous_tag()`, or
+    // `move_output_left()`/`move_output_right()`/`move_output_up()`/
+    // `move_output_down()` — the actions that already animate from a
+    // keybinding — the swipe drives that animation 1:1 with the finger
+    // instead of firing it outright; any other action just fires once,
+    // on release, like a key press. Only one action can be bound per
+    // `(fingers, direction)` pair; binding again overwrites it, same as
+    // `bind`.
     lua.globals().set("gesture", lua.create_function_mut(move |_, (fingers, direction, action): (u32, GestureDirection, Action)| {
         let config = config_clone.clone();
         let mut guard = config.borrow_mut();

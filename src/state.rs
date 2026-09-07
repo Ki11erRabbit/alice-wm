@@ -1200,6 +1200,61 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         Some(())
     }
 
+    /// Tablet layout's smaller tiles double as a master-select: clicking
+    /// one of them promotes it straight to the master slot instead of
+    /// merely focusing it in place, demoting whatever was master into
+    /// the slot the clicked window just vacated — the same "zoom to
+    /// master" a lot of dynamic tiling WMs bind separately, just done on
+    /// click since Tablet's whole point is a touch-friendly one-handed
+    /// layout. See the `PointerButton` press handler in `input.rs` —
+    /// it calls this first and only falls back to an ordinary focus
+    /// click when this returns `false`.
+    ///
+    /// Returns `false` (having done nothing) if `window` isn't tiled
+    /// here, isn't on a Tablet-layout scope, or is already master —
+    /// callers should fall back to an ordinary focus click in that case.
+    /// Otherwise this reorders the stack, focuses `window`, and
+    /// relayouts — the same reflow-morph animation `move_up`/`move_down`
+    /// get from `relayout` plays here automatically, just swapping the
+    /// clicked tile with the master tile instead of adjacent slots.
+    pub fn swap_to_master(&mut self, window: Window) -> bool {
+        let Some(id) = self.window_registry.find(window.clone()) else {
+            return false;
+        };
+        let Some(info) = self.window_registry.get(&id) else {
+            return false;
+        };
+        if info.floating {
+            // Dialogs sit outside the tiling grid entirely — clicking
+            // one is an ordinary focus click, never a master-swap.
+            return false;
+        }
+        let output = info.output;
+        let tag = info.tag;
+        let scope = LayoutScope { output, tag };
+
+        if self.layout_registry.get_layout(&scope).name() != "Tablet" {
+            return false;
+        }
+
+        let Some(master_id) = self.window_registry.master(&scope) else {
+            return false;
+        };
+
+        if master_id == id {
+            // Clicked the master tile itself — nothing to swap.
+            return false;
+        }
+
+        let Some(stack) = self.window_registry.get_stack_mut(&scope) else {
+            return false;
+        };
+        stack.swap_ids(id, master_id);
+        self.change_focus(id, window);
+        self.relayout(Some(scope));
+        true
+    }
+
     pub fn change_tag(&mut self, tag: TagId) -> Option<()> {
         let old_tag = self.outputs.current_focused_tag()?;
         let output = self.outputs.get_focused().id;
@@ -1544,12 +1599,6 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             return;
         }
 
-        // TEMPORARY DEBUG — remove once the invisibility issue is found.
-        eprintln!(
-            "start_window_morph: key={:?} output={} from={:?} to={:?} on_finish={:?}",
-            key, output.0, from, to, on_finish
-        );
-
         // Excluded from `Space`'s normal per-element rendering for the
         // duration — see `morph_elements_for_output`, which draws this
         // window itself, scaled, instead.
@@ -1565,6 +1614,25 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         BackendData::schedule_render(self);
     }
 
+    /// Sends the focused window to the neighboring output in `direction`
+    /// and follows it there. Animates the same way `move_up`/`move_down`
+    /// do: this just reorders which stack the window belongs to and
+    /// calls `relayout` on both the output it left and the one it landed
+    /// on, and `apply_rects`/`start_window_morph` pick up from there —
+    /// the window's `last_configured` rect (still holding its *old*,
+    /// pre-move position, since nothing here clears it) differs from the
+    /// freshly tiled rect the new output's layout just computed for it,
+    /// which is exactly the "reflow: from wherever it was to wherever
+    /// it's going" case `apply_rects` already handles for an ordinary
+    /// stack reorder. The only difference is the box it flies across
+    /// this time spans two outputs' worth of distance instead of one —
+    /// and since a `WindowMorph` belongs to (and is only drawn on) a
+    /// single output (see `morph_elements_for_output`), that plays out
+    /// as the window sliding in from off-screen on the *destination*
+    /// output's edge nearest the source, rather than visibly crossing
+    /// the physical gap between the two monitors. Bound to a gesture
+    /// (see `gesture.rs`'s `ResolvedKind::Output`), the same swipe that
+    /// triggers this also drives that slide live, 1:1 with the finger.
     pub fn move_to_output(&mut self, direction: crate::output::Direction) -> Option<()> {
         let new_output_id = self.select_output_direction(direction)?;
         let info = self.window_registry.get_focused()?;
@@ -1983,7 +2051,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                         anim.animation = Animation::manual(progress);
                     }
                 }
-                ResolvedKind::Stack { keys, .. } => {
+                ResolvedKind::Stack { keys, .. } | ResolvedKind::Output { keys, .. } => {
                     for key in keys {
                         if let Some(morph) = self.window_morphs.get_mut(key) {
                             morph.animation = Animation::manual(progress);
@@ -2018,7 +2086,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     anim.animation = anim.animation.release_to(now, target, release_duration);
                 }
             }
-            ResolvedKind::Stack { keys, undo } => {
+            ResolvedKind::Stack { keys, undo } | ResolvedKind::Output { keys, undo } => {
                 if commit {
                     for key in &keys {
                         if let Some(morph) = self.window_morphs.get_mut(key) {
@@ -2027,12 +2095,12 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     }
                 } else {
                     // Re-fire the opposite action: this both reverts the
-                    // stack reorder itself and — since
-                    // `start_window_morph_impl` continues smoothly from
-                    // a morph's *current* rect when one's already
-                    // mid-animation for that window — eases back from
-                    // wherever the drag currently sits rather than
-                    // snapping to the start first.
+                    // stack reorder (or, for `Output`, the output move)
+                    // itself and — since `start_window_morph_impl`
+                    // continues smoothly from a morph's *current* rect
+                    // when one's already mid-animation for that window —
+                    // eases back from wherever the drag currently sits
+                    // rather than snapping to the start first.
                     self.handle_action(undo);
                 }
             }
@@ -2046,6 +2114,47 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         Backend::schedule_render(self);
     }
 
+    /// Shared by every gesture whose bound action reorders/relocates
+    /// windows and lets `relayout` create the animation via the ordinary
+    /// `WindowMorph` reflow path (`MoveUpStack`/`MoveDownStack`'s stack
+    /// reorder, and `MoveOutputLeft`/`MoveOutputRight`/`MoveOutputUp`/
+    /// `MoveOutputDown`'s cross-output move): fires `action`, diffs
+    /// `window_morphs` before/after to find every morph it just created
+    /// or redirected, snaps each straight back to progress 0 (the finger
+    /// hasn't moved past the dead zone yet — `gesture_update` drives it
+    /// forward from here), and hands back the keys for the caller to
+    /// wrap in whichever `ResolvedKind` fits.
+    ///
+    /// Snapshotting each entry's `to` rect before, rather than just which
+    /// keys exist, is what catches a *replaced* morph too — a key that
+    /// already existed but now targets a different rect got a brand new
+    /// `Timed` animation from `start_window_morph_impl`, and needs
+    /// hijacking into `Manual` exactly the same as one that didn't exist
+    /// at all before. Missing that was leaving some windows animating on
+    /// their own 180ms clock instead of tracking the new gesture, which
+    /// is what made rapid repeated swipes look glitchy.
+    fn start_diffing_gesture(&mut self, action: Action) -> Vec<ObjectId> {
+        let mut before: std::collections::HashMap<ObjectId, Rect> = std::collections::HashMap::new();
+        for (key, morph) in self.window_morphs.iter() {
+            before.insert(key.clone(), morph.to);
+        }
+        self.handle_action(action);
+        let mut keys: Vec<ObjectId> = Vec::new();
+        for (key, morph) in self.window_morphs.iter() {
+            if before.get(key) != Some(&morph.to) {
+                keys.push(key.clone());
+            }
+        }
+
+        for key in &keys {
+            if let Some(morph) = self.window_morphs.get_mut(key) {
+                morph.animation = Animation::manual(0.0);
+            }
+        }
+
+        keys
+    }
+
     /// Fires `action` immediately — exactly as if it were bound to a key
     /// — and, if it started an animatable transition, hijacks that
     /// animation into `Manual` mode so subsequent `gesture_update` calls
@@ -2054,47 +2163,12 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
     fn start_resolved_gesture(&mut self, action: Action) -> ResolvedKind {
         match action {
             Action::MoveUpStack | Action::MoveDownStack => {
-                // `move_up`/`move_down` reorder the stack and relayout,
-                // which creates (or, for a window already mid-morph from
-                // a previous rapid swipe, *replaces*) a `WindowMorph` per
-                // window whose rect actually changed (see `apply_rects`)
-                // — usually the two that got swapped. Snapshotting each
-                // entry's `to` rect before, rather than just which keys
-                // exist, is what catches the replaced case too: a key
-                // that already existed but now targets a different rect
-                // got a brand new `Timed` animation from
-                // `start_window_morph_impl`, and needs hijacking into
-                // `Manual` exactly the same as one that didn't exist at
-                // all before — missing that was leaving some windows
-                // animating on their own 180ms clock instead of tracking
-                // the new gesture, which is what made rapid repeated
-                // swipes look glitchy.
-                let mut before: std::collections::HashMap<ObjectId, Rect> = std::collections::HashMap::new();
-                for (key, morph) in self.window_morphs.iter() {
-                    before.insert(key.clone(), morph.to);
-                }
-                self.handle_action(action.clone());
-                let mut keys: Vec<ObjectId> = Vec::new();
-                for (key, morph) in self.window_morphs.iter() {
-                    if before.get(key) != Some(&morph.to) {
-                        keys.push(key.clone());
-                    }
-                }
+                let keys = self.start_diffing_gesture(action.clone());
 
                 if keys.is_empty() {
                     // Nothing actually moved (e.g. only one window on
                     // this tag) — nothing to drive.
                     return ResolvedKind::Discrete { action: None };
-                }
-
-                for key in &keys {
-                    if let Some(morph) = self.window_morphs.get_mut(key) {
-                        // Snap back to progress 0 — i.e. exactly the
-                        // pre-swap rects — since the finger hasn't
-                        // actually moved (past the dead zone) yet. From
-                        // here, `gesture_update` drives it forward.
-                        morph.animation = Animation::manual(0.0);
-                    }
                 }
 
                 let undo = match action {
@@ -2103,6 +2177,24 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     _ => unreachable!(),
                 };
                 ResolvedKind::Stack { keys, undo }
+            }
+            Action::MoveOutputLeft | Action::MoveOutputRight | Action::MoveOutputUp | Action::MoveOutputDown => {
+                let keys = self.start_diffing_gesture(action.clone());
+
+                if keys.is_empty() {
+                    // No output in that direction to send the window to
+                    // (or nothing focused to move) — nothing to drive.
+                    return ResolvedKind::Discrete { action: None };
+                }
+
+                let undo = match action {
+                    Action::MoveOutputLeft => Action::MoveOutputRight,
+                    Action::MoveOutputRight => Action::MoveOutputLeft,
+                    Action::MoveOutputUp => Action::MoveOutputDown,
+                    Action::MoveOutputDown => Action::MoveOutputUp,
+                    _ => unreachable!(),
+                };
+                ResolvedKind::Output { keys, undo }
             }
             Action::FocusNextTag | Action::FocusPreviousTag => {
                 let output = self.outputs.get_focused().id;
@@ -2254,20 +2346,8 @@ where
     let morphs = std::mem::take(window_morphs);
     let mut elements = Vec::new();
 
-    // TEMPORARY DEBUG — remove once the invisibility issue is found.
-    eprintln!(
-        "morph_elements_for_output: output_id={} pending_morphs={}",
-        output_id.0,
-        morphs.len()
-    );
-
     for (key, morph) in morphs {
         if morph.output != output_id {
-            // TEMPORARY DEBUG
-            eprintln!(
-                "  skip {:?}: morph.output={} != output_id={}",
-                key, morph.output.0, output_id.0
-            );
             // Not this output's frame to advance — leave it untouched and
             // let that output's own render call handle it.
             window_morphs.insert(key, morph);
@@ -2279,22 +2359,12 @@ where
         // ~180ms close animation) has nothing left to safely render —
         // finish immediately rather than risk drawing a dead surface.
         if !morph.window.alive() || morph.is_finished(now) {
-            // TEMPORARY DEBUG
-            eprintln!(
-                "  finish {:?}: alive={} finished={} on_finish={:?} to={:?}",
-                key, morph.window.alive(), morph.is_finished(now), morph.on_finish, morph.to
-            );
             apply_morph_finish(space, &morph.window, morph.to, morph.on_finish);
             continue;
         }
 
         let rect = morph.current_rect(now);
         let produced = morph_render_elements(renderer, &morph.window, rect, output_origin, scale, 1.0);
-        // TEMPORARY DEBUG
-        eprintln!(
-            "  advance {:?}: rect={:?} produced_elements={} window_geometry={:?}",
-            key, rect, produced.len(), morph.window.geometry()
-        );
         elements.extend(produced);
         window_morphs.insert(key, morph);
     }

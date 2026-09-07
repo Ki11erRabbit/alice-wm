@@ -5,17 +5,20 @@
 //! For most actions that's all there is to it: the action fires once,
 //! on release, same as a key press.
 //!
-//! The four actions this was actually built for —
+//! The actions this was actually built for —
 //! [`Action::MoveUpStack`]/[`Action::MoveDownStack`] (the stack-reorder
-//! reflow) and [`Action::FocusNextTag`]/[`Action::FocusPreviousTag`]
-//! (the tag-switch slide) — already animate when triggered from the
-//! keyboard. Bound to a gesture, they additionally get driven 1:1 by the
-//! finger instead of running on a fixed timer: the swipe *is* the
-//! animation's progress, live, until the finger lifts, at which point it
-//! either finishes settling into place or eases back to where it
-//! started. See `Alice::gesture_update`/`gesture_end` in `state.rs` for
-//! the state machine that actually does this — this module just holds
-//! the data it operates on.
+//! reflow), [`Action::FocusNextTag`]/[`Action::FocusPreviousTag`] (the
+//! tag-switch slide), and [`Action::MoveOutputLeft`]/
+//! [`Action::MoveOutputRight`]/[`Action::MoveOutputUp`]/
+//! [`Action::MoveOutputDown`] (sending the focused window to the
+//! neighboring output in that direction) — already animate when
+//! triggered from the keyboard. Bound to a gesture, they additionally
+//! get driven 1:1 by the finger instead of running on a fixed timer: the
+//! swipe *is* the animation's progress, live, until the finger lifts, at
+//! which point it either finishes settling into place or eases back to
+//! where it started. See `Alice::gesture_update`/`gesture_end` in
+//! `state.rs` for the state machine that actually does this — this
+//! module just holds the data it operates on.
 
 use smithay::reexports::wayland_server::backend::ObjectId;
 
@@ -107,6 +110,15 @@ pub enum ResolvedKind {
     /// smoothly back from wherever the drag currently sits rather than
     /// snapping first.
     Stack { keys: Vec<ObjectId>, undo: Action },
+    /// Driving a batch of in-flight `WindowMorph`s the same way `Stack`
+    /// does, but started by `Action::MoveOutputLeft`/`MoveOutputRight`/
+    /// `MoveOutputUp`/`MoveOutputDown` instead of a stack reorder: the
+    /// focused window's own move to the neighboring output, plus
+    /// whichever siblings on the old and new outputs reflowed to make
+    /// room. `undo` is the opposite direction — re-firing it sends the
+    /// window right back where it came from, same reasoning as `Stack`'s
+    /// `undo`.
+    Output { keys: Vec<ObjectId>, undo: Action },
     /// This direction wasn't bound to anything animatable — either
     /// nothing at all, or an ordinary action with no live progress to
     /// drive. Nothing to do frame to frame; `action` (if any) fires once

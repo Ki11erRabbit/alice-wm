@@ -153,6 +153,31 @@ impl LayoutInfo {
             }
         }
     }
+
+    /// Swaps the stack positions of `a` and `b` (a no-op if either isn't
+    /// actually in this stack, or they're the same window). Used by the
+    /// Tablet layout's click-to-swap-with-master behavior (see
+    /// `Alice::swap_to_master` in `state.rs`) — unlike `move_up`/
+    /// `move_down`, which always swap with whichever slot is adjacent to
+    /// the currently-focused one, this swaps two specific windows
+    /// regardless of where either currently sits.
+    ///
+    /// Whichever of the two was already focused stays focused afterward
+    /// — the swap moves it to a new stack index, but shouldn't change
+    /// *which* window is focused.
+    pub fn swap_ids(&mut self, a: WindowId, b: WindowId) {
+        if a == b {
+            return;
+        }
+        let Some(ai) = self.stack.iter().position(|&x| x == a) else { return };
+        let Some(bi) = self.stack.iter().position(|&x| x == b) else { return };
+        self.stack.swap(ai, bi);
+        if self.focused_window == ai {
+            self.focused_window = bi;
+        } else if self.focused_window == bi {
+            self.focused_window = ai;
+        }
+    }
 }
 
 pub struct WindowRegistry {
@@ -294,6 +319,20 @@ impl WindowRegistry {
     /// walking every window to find that out.
     pub fn find_by_surface(&self, surface: &WlSurface) -> Option<WindowId> {
         self.surface_index.get(&surface.id()).copied()
+    }
+
+    /// The window occupying the layout's "master" slot for `scope` — the
+    /// first non-floating window in render order (`filter`'s order,
+    /// i.e. the raw stack *reversed* — see `filter`'s doc comment), which
+    /// is exactly the window every `Layout::arrange_*` impl puts at
+    /// index 0 (the big tile in `MasterStack`/`Tablet`, the first split
+    /// in `Fibonacci`). Floating windows (dialogs) are skipped since
+    /// they're excluded from the tiling grid entirely and never occupy
+    /// that slot — see `Alice::relayout_single`'s `floating`/`windows`
+    /// partition, which this mirrors.
+    pub fn master(&self, scope: &LayoutScope) -> Option<WindowId> {
+        self.filter(scope)
+            .find(|id| !self.get(id).map(|w| w.floating).unwrap_or(false))
     }
 
     pub fn fullscreen_window_for_output(&self, scope: &LayoutScope) -> Option<Window> {

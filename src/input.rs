@@ -125,17 +125,29 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                         .map(|(w, l)| (w.clone(), l))
                     {
                         self.space.raise_element(&window, true);
-                        keyboard.set_focus(
-                            self,
-                            Some(window.toplevel().unwrap().wl_surface().clone()),
-                            serial,
-                        );
-                        // Only the window whose activated state actually
-                        // changes needs a new configure — reconfiguring
-                        // every mapped window on every click made every
-                        // client (not just the focused one) redo layout on
-                        // every single mouse click.
-                        window.toplevel().unwrap().send_pending_configure();
+
+                        // In Tablet layout, clicking one of the smaller
+                        // (non-master) tiles swaps it into the master
+                        // slot instead of just focusing it — see
+                        // `Alice::swap_to_master`'s doc comment. It
+                        // already handles focus (and the reflow-morph
+                        // animation) itself when it applies, so the
+                        // ordinary focus-click below only runs when it
+                        // doesn't — an untiled window, a non-Tablet
+                        // layout, or a click on the master tile itself.
+                        if !self.swap_to_master(window.clone()) {
+                            keyboard.set_focus(
+                                self,
+                                Some(window.toplevel().unwrap().wl_surface().clone()),
+                                serial,
+                            );
+                            // Only the window whose activated state actually
+                            // changes needs a new configure — reconfiguring
+                            // every mapped window on every click made every
+                            // client (not just the focused one) redo layout on
+                            // every single mouse click.
+                            window.toplevel().unwrap().send_pending_configure();
+                        }
                     } else if let Some(layer) = self.layer_under(pos, &[
                         smithay::wayland::shell::wlr_layer::Layer::Bottom,
                         smithay::wayland::shell::wlr_layer::Layer::Background,
