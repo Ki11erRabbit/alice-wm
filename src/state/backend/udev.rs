@@ -309,7 +309,7 @@ impl Backend for UdevData {
                     .collect::<Vec<_>>()
             })
             .collect();
-        eprintln!("schedule_render: {} targets", targets.len());
+        eprintln!("[{:?}] schedule_render: {} targets", alice.start_time.elapsed(), targets.len());
         for (node, crtc) in targets {
             render_surface(alice, node, crtc);
         }
@@ -931,6 +931,7 @@ pub fn frame_finish(
     }
 
     surface.frame_pending = false;
+    eprintln!("[{:?}] frame_finish: crtc={:?} (real vblank)", alice.start_time.elapsed(), crtc);
 
     if alice.locked {
         alice.blanked_outputs.insert(surface.output.clone());
@@ -1104,47 +1105,75 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         .chain(space_elements.into_iter().map(UdevFrameRenderElement::Space))
         .collect();
 
-    match surface
+    let frame_queued = match surface
         .drm_output
         .render_frame(&mut renderer, &elements, [0.1, 0.1, 0.1, 1.0], FrameFlags::DEFAULT)
     {
         Ok(res) if !res.is_empty => {
             if let Err(err) = surface.drm_output.queue_frame(()) {
                 eprintln!("Failed to queue frame on crtc {:?}: {}", crtc, err);
+                false
             } else {
                 surface.frame_pending = true;
+                true
             }
         }
-        Ok(_) => {}
+        Ok(_) => false,
         Err(err) => {
             eprintln!("render_frame failed on crtc {:?}: {:?}", crtc, err);
+            false
         }
-    }
+    };
 
     alice.refresh_fractional_scale_for_output(&output);
 
-    alice.space.elements().for_each(|window| {
-        window.send_frame(&output, alice.start_time.elapsed(), Some(Duration::ZERO), |_, _| {
-            Some(output.clone())
-        })
-    });
-    if let Some(id) = alice.outputs.get(&output.name()).map(|info| info.id) {
-        if let Some(layers) = alice.layer_surfaces.get(&id) {
-            for layer in layers {
-                layer.surface.send_frame(&output, alice.start_time.elapsed(), Some(Duration::ZERO), |_, _| {
-                    Some(output.clone())
-                });
+    // Only actually tell clients "your last frame was shown, send the next
+    // one" (`wl_surface.frame`'s done callback) when a frame genuinely got
+    // queued to the display above — never unconditionally on every call to
+    // this function. `schedule_render` calls this directly (not just
+    // `frame_finish`, the real page-flip-completion callback) any time
+    // something asks for a redraw while no flip is currently in flight,
+    // and `Ok(_) => {}` above (no damage, nothing queued) is a completely
+    // ordinary outcome of that — most redraws asked for by an input event
+    // or a commit find nothing new to actually display. Sending the "go
+    // ahead" callback anyway, as this used to do regardless of whether
+    // anything was queued, invites every mapped client to immediately
+    // commit again — which promptly asks for another redraw, which (still
+    // often) finds nothing new either, and sends the same invitation
+    // again. With nothing here ever actually gated on a real vsync tick,
+    // that loop runs as fast as the CPU allows, entirely decoupled from
+    // the display's actual refresh rate — which is what produced the
+    // constant redraw storm (tens of thousands of `render_surface` calls
+    // per second, evenly across the whole session, regardless of whether
+    // any window was even open) rather than anything actually tied to
+    // tiling/layout. Gating on `frame_queued` restores the normal
+    // Wayland contract — a client only gets told to render again once its
+    // last frame was actually shown — so a quiescent scene naturally goes
+    // quiet instead of self-sustaining.
+    if frame_queued {
+        alice.space.elements().for_each(|window| {
+            window.send_frame(&output, alice.start_time.elapsed(), Some(Duration::ZERO), |_, _| {
+                Some(output.clone())
+            })
+        });
+        if let Some(id) = alice.outputs.get(&output.name()).map(|info| info.id) {
+            if let Some(layers) = alice.layer_surfaces.get(&id) {
+                for layer in layers {
+                    layer.surface.send_frame(&output, alice.start_time.elapsed(), Some(Duration::ZERO), |_, _| {
+                        Some(output.clone())
+                    });
+                }
             }
         }
-    }
-    if let Some(lock_surface) = alice.lock_surfaces.get(&output) {
-        smithay::desktop::utils::send_frames_surface_tree(
-            lock_surface.wl_surface(),
-            &output,
-            alice.start_time.elapsed(),
-            Some(Duration::ZERO),
-            |_, _| Some(output.clone()),
-        );
+        if let Some(lock_surface) = alice.lock_surfaces.get(&output) {
+            smithay::desktop::utils::send_frames_surface_tree(
+                lock_surface.wl_surface(),
+                &output,
+                alice.start_time.elapsed(),
+                Some(Duration::ZERO),
+                |_, _| Some(output.clone()),
+            );
+        }
     }
 
     alice.space.refresh();

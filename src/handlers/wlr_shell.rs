@@ -170,19 +170,16 @@ pub fn handle_commit<BackendData: Backend + 'static>(state: &mut Alice<BackendDa
     let output = state.outputs.get_id(output_id).output.clone();
     let mut map = layer_map_for_output(&output);
     map.arrange();
+    let zone = map.non_exclusive_zone();
+    drop(map);
 
     if !info.init_config {
-        let zone = map.non_exclusive_zone();
-        drop(map);
-
         let size = suggested_size(info.surface.wl_surface(), output_rect(&output), zone);
         info.surface.layer_surface().with_pending_state(|pending| {
             pending.size = Some(size);
         });
         info.surface.layer_surface().send_configure();
         info.init_config = true;
-    } else {
-        drop(map);
     }
 
     let keyboard_interactivity = with_states(surface, |states| {
@@ -200,6 +197,18 @@ pub fn handle_commit<BackendData: Backend + 'static>(state: &mut Alice<BackendDa
                 keyboard.set_focus(state, Some(surface.clone()), serial);
             }
         }
+    }
+
+    // The overwhelming majority of layer-surface commits — a status bar's
+    // clock ticking over, a battery percentage updating, a systray icon
+    // redrawing — don't change how much of the output is actually reserved.
+    // Only relayout (which reflows every tiled window on this output) when
+    // the non-exclusive zone this commit just produced genuinely differs
+    // from the last one seen — see the doc comment on `layer_zone_cache`.
+    // `HashMap::insert` returning the previous value lets this check-and-
+    // update happen in one lookup instead of two.
+    if state.layer_zone_cache.insert(output_id, zone) == Some(zone) {
+        return;
     }
 
     let Some(tag) = state.outputs.get_focused_tag(output_id) else {

@@ -7,7 +7,7 @@ use smithay::{
         calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic}, wayland_protocols::xdg::shell::server::xdg_toplevel, wayland_server::{
             Display, DisplayHandle, Resource, backend::{ClientData, ClientId, DisconnectReason, ObjectId}, protocol::{wl_output::WlOutput, wl_surface::WlSurface}
         }
-    }, utils::{IsAlive, Logical, Point, SERIAL_COUNTER}, wayland::{
+    }, utils::{IsAlive, Logical, Point, Rectangle, SERIAL_COUNTER}, wayland::{
         compositor::{CompositorClientState, CompositorState}, fractional_scale::FractionalScaleManagerState, output::OutputManagerState, selection::data_device::DataDeviceState, session_lock::{LockSurface, SessionLockManagerState, SessionLocker}, shell::{wlr_layer::{self, WlrLayerShellState}, xdg::XdgShellState}, shm::ShmState, socket::ListeningSocketSource, viewporter::ViewporterState
     }
 };
@@ -41,6 +41,26 @@ pub struct Alice<BackendData: Backend + 'static> {
 
     pub layer_surfaces: LayerRegistry,
     pub layer_shell_state: WlrLayerShellState,
+
+    /// The non-exclusive zone (the tiling area left over after every
+    /// layer-shell surface's exclusive-zone reservation, per
+    /// `LayerMap::non_exclusive_zone`) last seen for each output — see
+    /// `wlr_shell::handle_commit`, which is called on *every* commit from
+    /// *any* layer-shell surface (a status bar's clock tick, a battery
+    /// percentage updating, a systray icon redrawing, ...), the overwhelming
+    /// majority of which don't actually change how much of the output is
+    /// reserved. Without this cache, every one of those commits triggered a
+    /// full `relayout` unconditionally regardless of whether the tiling
+    /// area actually changed — and on the (rarer, but far from negligible)
+    /// commits where a text-based panel's own committed width genuinely
+    /// does shift by a pixel or two (its clock's digit count changing, a
+    /// battery readout going from 2 digits to 3, ...), that unconditional
+    /// relayout was a real, legitimate few-pixel reflow of every tiled
+    /// window on that output — recurring roughly as often as the panel
+    /// updates. This cache lets `handle_commit` skip the relayout
+    /// entirely when the zone it just recomputed matches what's already
+    /// stored here.
+    pub layer_zone_cache: HashMap<OutputId, smithay::utils::Rectangle<i32, Logical>>,
 
     /// One in-flight tag-switch slide animation per output that currently
     /// has one running (see `slide_tag`/`advance_tag_animations` and
@@ -180,6 +200,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
             layer_surfaces: LayerRegistry::new(),
             layer_shell_state,
+            layer_zone_cache: HashMap::new(),
             tag_animations: HashMap::new(),
             window_morphs: HashMap::new(),
             workspace_manager,
@@ -326,20 +347,47 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
     /// or a window/layer moves onto a different output.
     ///
     /// This is a simplified stand-in for Smithay's `primary_scanout_output`
-    /// tracking (see `anvil`'s `post_repaint`): it updates every window
-    /// unconditionally rather than only those actually scanned out on
-    /// `output`, matching the simplification the existing `send_frame`
-    /// loops already make in this compositor.
+    /// tracking (see `anvil`'s `post_repaint`): rather than tracking which
+    /// output most recently scanned out each surface, it just re-derives
+    /// "is this window on `output` right now" from `Space` on every call
+    /// via `outputs_for_element`, and only touches windows for which that's
+    /// true. Cheaper alternatives (e.g. unconditionally updating every
+    /// window regardless of `output`) cause every window's preferred scale
+    /// to thrash between whichever outputs' scales differ, once per output
+    /// per frame — see the filter below for what that did to Firefox.
     pub fn refresh_fractional_scale_for_output(&self, output: &Output) {
         let scale = output.current_scale().fractional_scale();
 
-        self.space.elements().for_each(|window| {
-            window.with_surfaces(|_, states| {
-                smithay::wayland::fractional_scale::with_fractional_scale(states, |fractional_scale| {
-                    fractional_scale.set_preferred_scale(scale);
+        // Which output "owns" this window — from our own tiling
+        // assignment (`WindowInfo::output`), not from `Space`'s geometric
+        // bbox overlap (`outputs_for_element`/`Space::refresh`). Those
+        // agree almost always, but `Space`'s overlap is computed from
+        // `bbox_with_popups()`, which includes a client's own CSD shadow
+        // margin — often larger than this compositor's tiling gap. A
+        // window tiled flush against the seam between two adjacent
+        // outputs then has its (invisible) shadow bleed a few dozen
+        // pixels into the neighboring output, and `Space` — correctly,
+        // given that input — considers it present on both. That made
+        // this function ping-pong the affected window's preferred scale
+        // between both outputs' values every frame (see the git history
+        // here for the diagnostic that caught it: a window's logged bbox
+        // was consistently ~44px larger on every side than its geometry,
+        // matching a shadow margin bigger than the 15px tiling gap).
+        // `WindowInfo::output` has no such ambiguity — our own layout
+        // assigned this window to exactly one output, full stop.
+        let Some(output_id) = self.outputs.get(&output.name()).map(|info| info.id) else {
+            return;
+        };
+
+        self.window_registry.iter()
+            .filter(|info| info.output == output_id)
+            .for_each(|info| {
+                info.window.with_surfaces(|_, states| {
+                    smithay::wayland::fractional_scale::with_fractional_scale(states, |fractional_scale| {
+                        fractional_scale.set_preferred_scale(scale);
+                    });
                 });
             });
-        });
 
         if let Some(id) = self.outputs.get(&output.name()).map(|info| info.id) {
             if let Some(layers) = self.layer_surfaces.get(&id) {
@@ -586,7 +634,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         } else {
             layout.arrange_vertical(area, &windows, self.config.gap_size(), self.config.tiling_config.clone())
         };
-        //,eprintln!("relayout_single: area={:?} windows={} rects={:?}", area, windows.len(), rects);
+        eprintln!("[{:?}] relayout_single: output={:?} area={:?} windows={} rects={:?}", self.start_time.elapsed(), output.id.0, area, windows.len(), rects);
 
         for (id, rect) in windows.iter().zip(rects) {
             self.apply_rects(*id, rect, animate);
@@ -720,7 +768,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             // on this window's position either — nothing to animate.
             _ => self.space.map_element(window_obj, (rect.x, rect.y), false),
         }
-        //,eprintln!("apply_rects: window {:?} -> {:?}", id, rect);
+        eprintln!("[{:?}] apply_rects: window {:?} -> {:?} (animate={})", self.start_time.elapsed(), id, rect, animate);
     }
 
     /// Places a floating window (see `WindowInfo::floating`) centered
@@ -1026,15 +1074,21 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             .map(|id| (id, window))
     }
 
-    pub fn remove_window(&mut self, surface: &WlSurface) {
+    /// Removes the window backing `surface` and returns the
+    /// `LayoutScope` (output + tag) it was on, so the caller can relayout
+    /// just that scope instead of every output — see `toplevel_destroyed`,
+    /// which used to relayout unconditionally on every close regardless of
+    /// which output the closed window was even on.
+    pub fn remove_window(&mut self, surface: &WlSurface) -> Option<LayoutScope> {
         let Some(id) = self.window_registry.find_by_surface(surface) else {
-            return;
+            return None;
         };
         let Some(info) = self.window_registry.get(&id) else {
-            return
+            return None
         };
         let window = info.window.clone();
         let output = info.output;
+        let tag = info.tag;
         let last_rect = info.last_configured.map(|(rect, _)| rect);
 
         let was_focused = self.window_registry.focused_window() == Some(id);
@@ -1064,7 +1118,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         self.broadcast_workspace_state();
 
         if !was_focused {
-            return;
+            return Some(LayoutScope { output, tag });
         }
 
         // Try to hand focus to whatever's next on the same output/tag.
@@ -1076,7 +1130,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             if let Some(next_id) = next {
                 if let Some(next_window) = self.window_registry.get(&next_id).map(|i| i.window.clone()) {
                     self.change_focus(next_id, next_window);
-                    return;
+                    return Some(LayoutScope { output, tag });
                 }
             }
         }
@@ -1086,6 +1140,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let keyboard = self.seat.get_keyboard().unwrap();
         let serial = SERIAL_COUNTER.next_serial();
         keyboard.set_focus(self, Option::<WlSurface>::None, serial);
+        Some(LayoutScope { output, tag })
     }
 
     pub fn focus_window(&mut self, window: Window) {
@@ -1585,6 +1640,22 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         };
 
         let now = Instant::now();
+        // Frozen once, here, rather than read fresh every render frame —
+        // see the doc comment on `WindowMorph::base` for why re-reading
+        // `window.geometry()` live was the actual jitter bug: a fast
+        // client (Alacritty, Firefox) can commit an already-`to`-sized
+        // buffer before this animation finishes, and using that as the
+        // live reference would snap the scale factor mid-flight. If a
+        // morph is already running for this window, keep whatever base
+        // it already captured rather than re-reading `window.geometry()`
+        // now — by this point the client may already have committed
+        // toward the *previous* `to`, so the window's current geometry
+        // may no longer reflect the size the in-flight animation has
+        // actually been stretching from.
+        let base = match self.window_morphs.get(&key) {
+            Some(existing) => existing.base,
+            None => window.geometry().size,
+        };
         if let Some(existing) = self.window_morphs.get(&key) {
             // Already mid-animation — e.g. the stack got reordered again,
             // or a second close arrived, before the last one finished.
@@ -1603,6 +1674,36 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         // duration — see `morph_elements_for_output`, which draws this
         // window itself, scaled, instead.
         self.space.unmap_elem(&window);
+
+        // `Space::unmap_elem` (see Smithay's implementation) synchronously
+        // fires a real `wl_surface.leave` for every output this window
+        // was on — and nothing sends the matching `enter` back until this
+        // animation finishes and the window is remapped, up to 180ms
+        // later. The window never actually left `output`: it's still
+        // being drawn there the entire time, just via this scaled morph
+        // path instead of `Space`'s own. But the client doesn't know
+        // that — it just saw its window leave a monitor. Firefox in
+        // particular treats an output-leave as a real monitor change
+        // (different scale, different color profile, different vsync)
+        // and tears down/renegotiates its rendering surface in response,
+        // which is exactly the flicker/resize-loop that shows up on
+        // every sibling open/close/reorder once more than one window is
+        // tiled together.
+        //
+        // `Output::enter`/`leave` are idempotent (Smithay tracks a
+        // per-output set of already-entered surfaces and only actually
+        // sends the protocol event on a real state change), so
+        // re-asserting "still here" immediately below — using the same
+        // whole-bbox-on-one-output overlap `Space::refresh` itself would
+        // compute for a window that doesn't straddle two outputs, which
+        // covers every ordinary tiled reflow this path handles — collapses
+        // into a same-batch leave+enter pair the client never gets a
+        // chance to act on in between, instead of a real ~180ms absence.
+        if let Some(output_obj) = self.outputs.iter().find(|info| info.id == output).map(|info| info.output.clone()) {
+            let overlap = Rectangle::new((0, 0).into(), window.bbox_with_popups().size);
+            smithay::desktop::space::SpaceElement::output_enter(&window, &output_obj, overlap);
+        }
+
         self.window_morphs.insert(key, WindowMorph {
             window,
             output,
@@ -1610,6 +1711,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             from,
             to,
             on_finish,
+            base,
         });
         BackendData::schedule_render(self);
     }
@@ -2364,7 +2466,7 @@ where
         }
 
         let rect = morph.current_rect(now);
-        let produced = morph_render_elements(renderer, &morph.window, rect, output_origin, scale, 1.0);
+        let produced = morph_render_elements(renderer, &morph.window, rect, morph.base, output_origin, scale, 1.0);
         elements.extend(produced);
         window_morphs.insert(key, morph);
     }

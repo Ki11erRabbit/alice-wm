@@ -294,6 +294,24 @@ pub struct WindowMorph {
     pub from: Rect,
     pub to: Rect,
     pub on_finish: MorphFinish,
+    /// The window's real, committed buffer size at the *moment this
+    /// animation started* — frozen here rather than re-read from
+    /// `window.geometry()` on every frame. See `morph_render_elements`
+    /// for why: a fast client (Alacritty, Firefox — both routinely
+    /// redraw well within this animation's ~180ms) can commit a new
+    /// buffer already sized to `to` before the animation finishes. If
+    /// the scale factor were computed against `window.geometry()` fresh
+    /// each frame, that commit would suddenly swap the reference size
+    /// the stretch is computed against mid-flight — the buffer jumping
+    /// from "old size, needs scaling up toward `to`" to "already `to`
+    /// size, needs scaling *down* to match wherever the animation's
+    /// interpolated rect currently sits" — a visible snap/jitter right
+    /// in the middle of the reflow. Freezing it here means the client
+    /// committing early just means the last few frames stretch an
+    /// already-correct-resolution buffer instead of a lower-res one —
+    /// invisible — rather than changing what "no scaling needed" means
+    /// partway through.
+    pub base: Size<i32, Logical>,
 }
 
 impl WindowMorph {
@@ -413,6 +431,7 @@ pub fn morph_render_elements<R>(
     renderer: &mut R,
     window: &Window,
     rect: Rect,
+    base: Size<i32, Logical>,
     output_origin: Point<i32, Logical>,
     scale: f64,
     alpha: f32,
@@ -421,10 +440,15 @@ where
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,
 {
-    // The window's real, currently-configured size — never changes
-    // mid-animation (see the module doc on `WindowMorph`), so it's the
-    // fixed reference every frame's scale factor is computed against.
-    let base = window.geometry().size;
+    // `base` is `WindowMorph::base` — the window's real buffer size
+    // *frozen at the moment this animation started* — deliberately not
+    // `window.geometry().size` read fresh here. See the doc comment on
+    // `WindowMorph::base` for why re-reading it live was the actual
+    // source of the jitter: a fast client can commit a new, already-`to`
+    // -sized buffer well before this animation's ~180ms are up, and
+    // reading `window.geometry()` at that point would suddenly change
+    // what "the buffer's real size" means mid-animation, snapping the
+    // computed scale factor the wrong way for the remaining frames.
     if base.w <= 0 || base.h <= 0 {
         return Vec::new();
     }

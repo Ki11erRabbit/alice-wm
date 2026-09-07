@@ -118,10 +118,9 @@ impl<BackendData: Backend + 'static> XdgShellHandler for Alice<BackendData> {
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let surface = surface.wl_surface();
 
-        self.remove_window(surface);
+        let scope = self.remove_window(surface);
 
-        // TODO: this should probably only be the output the window is on.
-        self.relayout(None);
+        self.relayout(scope);
         BackendData::schedule_render(self);
     }
 

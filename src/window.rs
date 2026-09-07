@@ -282,6 +282,18 @@ impl WindowRegistry {
         self.map.get_mut(id)
     }
 
+    /// Every mapped window's info, regardless of output or tag — unlike
+    /// `filter`, which is scoped to one `LayoutScope`. Used by
+    /// `Alice::refresh_fractional_scale_for_output` to find "every window
+    /// truly on this output" from our own tiling assignment (`WindowInfo
+    /// ::output`) rather than from `Space`'s geometric bbox overlap, which
+    /// a client's own CSD shadow margin can push across the seam between
+    /// two adjacent outputs even though the window is unambiguously tiled
+    /// on just one of them.
+    pub fn iter(&self) -> impl Iterator<Item = &WindowInfo> {
+        self.map.values()
+    }
+
     pub fn get_stack_mut(&mut self, scope: &LayoutScope) -> Option<&mut LayoutInfo> {
         self.order.get_mut(scope)
     }
