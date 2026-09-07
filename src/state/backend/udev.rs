@@ -309,7 +309,7 @@ impl Backend for UdevData {
                     .collect::<Vec<_>>()
             })
             .collect();
-        eprintln!("[{:?}] schedule_render: {} targets", alice.start_time.elapsed(), targets.len());
+        //eprintln!("[{:?}] schedule_render: {} targets", alice.start_time.elapsed(), targets.len());
         for (node, crtc) in targets {
             render_surface(alice, node, crtc);
         }

@@ -634,7 +634,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         } else {
             layout.arrange_vertical(area, &windows, self.config.gap_size(), self.config.tiling_config.clone())
         };
-        eprintln!("[{:?}] relayout_single: output={:?} area={:?} windows={} rects={:?}", self.start_time.elapsed(), output.id.0, area, windows.len(), rects);
+        //eprintln!("[{:?}] relayout_single: output={:?} area={:?} windows={} rects={:?}", self.start_time.elapsed(), output.id.0, area, windows.len(), rects);
 
         for (id, rect) in windows.iter().zip(rects) {
             self.apply_rects(*id, rect, animate);
@@ -768,7 +768,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             // on this window's position either — nothing to animate.
             _ => self.space.map_element(window_obj, (rect.x, rect.y), false),
         }
-        eprintln!("[{:?}] apply_rects: window {:?} -> {:?} (animate={})", self.start_time.elapsed(), id, rect, animate);
+        //eprintln!("[{:?}] apply_rects: window {:?} -> {:?} (animate={})", self.start_time.elapsed(), id, rect, animate);
     }
 
     /// Places a floating window (see `WindowInfo::floating`) centered
