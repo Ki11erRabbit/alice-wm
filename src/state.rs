@@ -531,9 +531,9 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         let layout = self.layout_registry.get_layout(&scope);
         let rects = if area.width >= area.height {
-            layout.arrange_horizontal(area, &windows, self.config.gap_size())
+            layout.arrange_horizontal(area, &windows, self.config.gap_size(), self.config.tiling_config.clone())
         } else {
-            layout.arrange_vertical(area, &windows, self.config.gap_size())
+            layout.arrange_vertical(area, &windows, self.config.gap_size(), self.config.tiling_config.clone())
         };
         //,eprintln!("relayout_single: area={:?} windows={} rects={:?}", area, windows.len(), rects);
 
@@ -1278,6 +1278,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             Action::ReloadConfig => {
                 self.config = BackendData::make_config();
                 self.apply_keyboard_layout();
+                self.execute_commands();
             }
             Action::Close => {
                 let Some(info) = self.window_registry.get_focused() else {
@@ -1364,6 +1365,51 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             Action::MoveOutputDown => {
                 self.move_to_output(crate::output::Direction::Down);
             }
+            Action::IncrementMasterRatio(amount) => {
+                let new_value = self.config.tiling_config.master_ratio + amount;
+                if new_value < 0.95 {
+                    self.config.tiling_config.master_ratio = new_value;
+                }
+                self.relayout(None);
+            }
+            Action::DecrementMasterRatio(amount) => {
+                let new_value = self.config.tiling_config.master_ratio - amount;
+                if new_value > 0.05 {
+                    self.config.tiling_config.master_ratio = new_value;
+                }
+                self.relayout(None);
+            }
+            Action::HideTabletWindows => {
+                self.config.tiling_config.tablet_hide_minimized = true;
+                self.relayout(None);
+            }
+            Action::ShowTabletWindows => {
+                self.config.tiling_config.tablet_hide_minimized = false;
+                self.relayout(None);
+            }
+            Action::ToggleTabletWindows => {
+                self.config.tiling_config.tablet_hide_minimized = !self.config.tiling_config.tablet_hide_minimized;
+                self.relayout(None);
+            }
+            Action::MakeRightHanded => {
+                self.config.tiling_config.right_handed = true;
+                self.relayout(None);
+            }
+            Action::MakeLeftHanded => {
+                self.config.tiling_config.right_handed = false;
+                self.relayout(None);
+            }
+            Action::FlipHandedness => {
+                self.config.tiling_config.right_handed = !self.config.tiling_config.right_handed;
+                self.relayout(None);
+            }
+        }
+    }
+
+    fn execute_commands(&mut self) {
+        let commands = self.config.execute_actions();
+        for command in commands {
+            self.handle_action(command);
         }
     }
 
@@ -1373,6 +1419,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 self.spawn(command);
             }
             self.done_autostart = true;
+            self.execute_commands();
         }
     }
 

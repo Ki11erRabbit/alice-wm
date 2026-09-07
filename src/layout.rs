@@ -10,11 +10,27 @@ pub struct Rect {
     pub height: i32,
 }
 
+#[derive(Clone, Copy)]
+pub struct TilingConfig {
+    pub master_ratio: f64,
+    pub right_handed: bool,
+    pub tablet_hide_minimized: bool,
+}
+
+impl TilingConfig {
+    pub fn new() -> Self {
+        Self {
+            master_ratio: 0.5,
+            right_handed: true,
+            tablet_hide_minimized: false,
+        }
+    }
+}
 
 pub trait Layout {
     fn name(&self) -> &'static str;
-    fn arrange_horizontal(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect>;
-    fn arrange_vertical(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect>;
+    fn arrange_horizontal(&self, area: Rect, windows: &[WindowId], gap_size: i32, config: TilingConfig) -> Vec<Rect>;
+    fn arrange_vertical(&self, area: Rect, windows: &[WindowId], gap_size: i32, config: TilingConfig) -> Vec<Rect>;
 }
 
 
@@ -25,17 +41,19 @@ impl Layout for MasterStack {
         "MasterStack"
     }
 
-    fn arrange_horizontal(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect> {
+    fn arrange_horizontal(&self, area: Rect, windows: &[WindowId], gap_size: i32, config: TilingConfig) -> Vec<Rect> {
         if windows.is_empty() {
             return Vec::new();
         }
         if windows.len() == 1 {
             return vec![area];
         }
+
+        let main_area = (area.width as f64 * config.master_ratio).round() as i32;
         let main_rect = Rect {
             x: area.x,
             y: area.y,
-            width: (area.width / 2).saturating_sub(gap_size),
+            width: main_area.saturating_sub(gap_size),
             height: area.height
         };
         let remaining_rect = Rect {
@@ -65,18 +83,19 @@ impl Layout for MasterStack {
         out
     }
 
-    fn arrange_vertical(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect> {
+    fn arrange_vertical(&self, area: Rect, windows: &[WindowId], gap_size: i32, config: TilingConfig) -> Vec<Rect> {
         if windows.is_empty() {
             return Vec::new();
         }
         if windows.len() == 1 {
             return vec![area];
         }
+        let main_area = (area.height as f64 * config.master_ratio).round() as i32;
         let main_rect = Rect {
             x: area.x,
             y: area.y,
             width: area.width,
-            height: (area.height / 2).saturating_sub(gap_size),
+            height: main_area.saturating_sub(gap_size),
         };
         let remaining_rect = Rect {
             x: area.x,
@@ -113,13 +132,13 @@ impl Layout for Fibonacci {
         "Fibonacci"
     }
 
-    fn arrange_horizontal(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect> {
+    fn arrange_horizontal(&self, area: Rect, windows: &[WindowId], gap_size: i32, config: TilingConfig) -> Vec<Rect> {
         let mut out = Vec::with_capacity(windows.len());
         fib(Phase::Right, area, windows.len(), gap_size, &mut out);
         out
     }
 
-    fn arrange_vertical(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect> {
+    fn arrange_vertical(&self, area: Rect, windows: &[WindowId], gap_size: i32, config: TilingConfig) -> Vec<Rect> {
         let mut out = Vec::with_capacity(windows.len());
         fib(Phase::Down, area, windows.len(), gap_size, &mut out);
         out
@@ -254,20 +273,26 @@ impl Layout for Tablet {
         "Tablet"
     }
 
-    fn arrange_horizontal(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect> {
+    fn arrange_horizontal(&self, area: Rect, windows: &[WindowId], gap_size: i32, config: TilingConfig) -> Vec<Rect> {
         if windows.is_empty() {
              return Vec::new();
         }
-        if windows.len() == 1 {
+        if windows.len() == 1 || config.tablet_hide_minimized {
             return vec![area];
         }
 
         let segment_size = (area.width / 4);
 
+        let left_factor = if config.right_handed {
+            1
+        } else {
+            3
+        };
+
         let main_rect = Rect {
             x: area.x,
             y: area.y,
-            width: (segment_size * 3).saturating_sub(gap_size),
+            width: (segment_size * left_factor).saturating_sub(gap_size),
             height: area.height
         };
         let remaining_rect = Rect {
@@ -277,13 +302,19 @@ impl Layout for Tablet {
             height: area.height,
         };
         let mut out = Vec::with_capacity(windows.len());
+
+        let (main_rect, rest_rect) = if config.right_handed {
+            (remaining_rect, main_rect)
+        } else {
+            (main_rect, remaining_rect)
+        };
         out.push(main_rect);
 
         let part_size = area.height / (windows.len() - 1) as i32; // Skipping first window
         let stack_rect = Rect {
-            x: remaining_rect.x,
-            y: remaining_rect.y,
-            width: remaining_rect.width,
+            x: rest_rect.x,
+            y: rest_rect.y,
+            width: rest_rect.width,
             height: part_size,
         };
         let mut stack = vec![stack_rect; windows.len() - 1];
@@ -297,11 +328,11 @@ impl Layout for Tablet {
         out
     }
 
-    fn arrange_vertical(&self, area: Rect, windows: &[WindowId], gap_size: i32) -> Vec<Rect> {
+    fn arrange_vertical(&self, area: Rect, windows: &[WindowId], gap_size: i32, config: TilingConfig) -> Vec<Rect> {
         if windows.is_empty() {
             return Vec::new();
         }
-        if windows.len() == 1 {
+        if windows.len() == 1 || config.tablet_hide_minimized {
             return vec![area];
         }
 

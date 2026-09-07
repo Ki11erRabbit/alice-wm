@@ -4,6 +4,7 @@ use mlua::{FromLua, Lua, MetaMethod, Table, UserData};
 use smithay::input::keyboard::{Keysym, ModifiersState, XkbConfig};
 use smithay::utils::Transform;
 
+use crate::layout::TilingConfig;
 use crate::output::TagId;
 
 
@@ -34,6 +35,14 @@ pub enum Action {
     MoveOutputRight,
     MoveOutputUp,
     MoveOutputDown,
+    IncrementMasterRatio(f64),
+    DecrementMasterRatio(f64),
+    HideTabletWindows,
+    ShowTabletWindows,
+    ToggleTabletWindows,
+    MakeRightHanded,
+    MakeLeftHanded,
+    FlipHandedness,
 }
 
 impl UserData for Action {
@@ -210,7 +219,9 @@ pub struct Config {
     lock_map: HashMap<KeyPress, Action>,
     output_positions: HashMap<String, OutputPosition>,
     auto_start: Vec<String>,
+    execute_commands: Vec<Action>,
     keyboard_layout: KeyboardLayout,
+    pub tiling_config: TilingConfig,
     gap_size: i32,
 }
 
@@ -221,7 +232,9 @@ impl Config {
             lock_map: HashMap::new(),
             output_positions: HashMap::new(),
             auto_start: Vec::new(),
+            execute_commands: Vec::new(),
             keyboard_layout: KeyboardLayout::default(),
+            tiling_config: TilingConfig::new(),
             gap_size: 0,
         }
     }
@@ -256,6 +269,10 @@ impl Config {
 
     pub fn autostarts(&self) -> impl Iterator<Item = &String> {
         self.auto_start.iter()
+    }
+
+    pub fn execute_actions(&self) -> Vec<Action> {
+        self.execute_commands.clone()
     }
     /// The currently configured keyboard layout. Defaults to
     /// `KeyboardLayout::default()` (i.e. deferring to the `XKB_DEFAULT_*`
@@ -455,7 +472,9 @@ impl Default for Config {
             lock_map: HashMap::new(),
             output_positions: HashMap::new(),
             auto_start: Vec::new(),
+            execute_commands: Vec::new(),
             keyboard_layout: KeyboardLayout::default(),
+            tiling_config: TilingConfig::new(),
             gap_size: 0,
         }
     }
@@ -467,21 +486,11 @@ fn create_lua(use_alt: bool) -> mlua::Result<Lua> {
 
     let modifier_table: Table = lua.create_table()?;
 
-    modifier_table.set("super", lua.create_function(|_, _: ()| {
-        Ok(ModMask::Super)
-    })?)?;
-    modifier_table.set("ctrl", lua.create_function(|_, _: ()| {
-        Ok(ModMask::Ctrl)
-    })?)?;
-    modifier_table.set("alt", lua.create_function(|_, _: ()| {
-        Ok(ModMask::Alt)
-    })?)?;
-    modifier_table.set("shift", lua.create_function(|_, _: ()| {
-        Ok(ModMask::Shift)
-    })?)?;
-    modifier_table.set("none", lua.create_function(|_, _: ()| {
-        Ok(ModMask::empty())
-    })?)?;
+    modifier_table.set("super", ModMask::Super)?;
+    modifier_table.set("ctrl", ModMask::Ctrl)?;
+    modifier_table.set("alt", ModMask::Alt)?;
+    modifier_table.set("shift", ModMask::Shift)?;
+    modifier_table.set("none", ModMask::empty())?;
     modifier_table.set("default", lua.create_function(move |_, _: ()| {
         if use_alt {
             Ok(ModMask::Alt)
@@ -574,6 +583,30 @@ fn create_lua(use_alt: bool) -> mlua::Result<Lua> {
     action_table.set("move_output_down", lua.create_function(|_, _: ()| {
         Ok(Action::MoveOutputDown)
     })?)?;
+    action_table.set("master_ratio_inc", lua.create_function(|_, amount: f64| {
+        Ok(Action::IncrementMasterRatio(amount))
+    })?)?;
+    action_table.set("master_ratio_dec", lua.create_function(|_, amount: f64| {
+        Ok(Action::DecrementMasterRatio(amount))
+    })?)?;
+    action_table.set("hide_tablet_windows", lua.create_function(|_, _: ()| {
+        Ok(Action::HideTabletWindows)
+    })?)?;
+    action_table.set("show_tablet_windows", lua.create_function(|_, _: ()| {
+        Ok(Action::ShowTabletWindows)
+    })?)?;
+    action_table.set("toggle_tablet_windows", lua.create_function(|_, _: ()| {
+        Ok(Action::ToggleTabletWindows)
+    })?)?;
+    action_table.set("make_right_handed", lua.create_function(|_, _: ()| {
+        Ok(Action::MakeRightHanded)
+    })?)?;
+    action_table.set("make_left_handed", lua.create_function(|_, _: ()| {
+        Ok(Action::MakeLeftHanded)
+    })?)?;
+    action_table.set("flip_handness", lua.create_function(|_, _: ()| {
+        Ok(Action::FlipHandedness)
+    })?)?;
 
     lua.globals().set("Action", action_table)?;
 
@@ -650,6 +683,15 @@ fn load_config(use_alt: bool, file_text: &str) -> mlua::Result<Config> {
         let config = config_clone.clone();
         let mut guard = config.borrow_mut();
         guard.auto_start.push(command);
+        Ok(())
+    })?)?;
+
+    let config_clone = config.clone();
+
+    lua.globals().set("execute", lua.create_function_mut(move |_, command: Action| {
+        let config = config_clone.clone();
+        let mut guard = config.borrow_mut();
+        guard.execute_commands.push(command);
         Ok(())
     })?)?;
 
