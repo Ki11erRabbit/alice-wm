@@ -4,6 +4,7 @@ use mlua::{FromLua, Lua, MetaMethod, Table, UserData};
 use smithay::input::keyboard::{Keysym, ModifiersState, XkbConfig};
 use smithay::utils::Transform;
 
+use crate::gesture::GestureDirection;
 use crate::layout::TilingConfig;
 use crate::output::TagId;
 
@@ -151,6 +152,17 @@ impl FromLua for KeyPress {
     }
 }
 
+impl UserData for GestureDirection {}
+
+impl FromLua for GestureDirection {
+    fn from_lua(value: mlua::prelude::LuaValue, _: &Lua) -> mlua::prelude::LuaResult<Self> {
+        match value {
+            mlua::Value::UserData(data) => Ok(*data.borrow::<Self>()?),
+            x => Err(mlua::Error::runtime(format!("Not a gesture direction: `{}`", x.type_name()))),
+        }
+    }
+}
+
 /// A user-configured position for a named output (connector), e.g. `"DP-1"`
 /// or `"HDMI-A-1"`, in the compositor's global (layout) coordinate space,
 /// along with optional transform/scale/refresh preferences for that output.
@@ -217,6 +229,10 @@ impl KeyboardLayout {
 pub struct Config {
     map: HashMap<KeyPress, Action>,
     lock_map: HashMap<KeyPress, Action>,
+    /// Touchpad swipe bindings: `(finger count, direction) -> action`.
+    /// See `gesture.rs` for how these actually get driven once bound —
+    /// this is just what the user configured.
+    gesture_map: HashMap<(u32, GestureDirection), Action>,
     output_positions: HashMap<String, OutputPosition>,
     auto_start: Vec<String>,
     execute_commands: Vec<Action>,
@@ -230,6 +246,7 @@ impl Config {
         Self {
             map: HashMap::new(),
             lock_map: HashMap::new(),
+            gesture_map: HashMap::new(),
             output_positions: HashMap::new(),
             auto_start: Vec::new(),
             execute_commands: Vec::new(),
@@ -245,6 +262,16 @@ impl Config {
 
     pub fn insert_keypress(&mut self, press: KeyPress, action: Action) {
         self.map.insert(press, action);
+    }
+
+    /// The action bound (via `gesture(...)` in Lua, or one of the
+    /// defaults) to an `fingers`-finger swipe in `direction`, if any.
+    pub fn get_gesture(&self, fingers: u32, direction: GestureDirection) -> Option<&Action> {
+        self.gesture_map.get(&(fingers, direction))
+    }
+
+    pub fn insert_gesture(&mut self, fingers: u32, direction: GestureDirection, action: Action) {
+        self.gesture_map.insert((fingers, direction), action);
     }
 
     pub fn get_lock_keypress(&self, press: &KeyPress) -> Option<&Action> {
@@ -467,9 +494,25 @@ impl Default for Config {
         }, Action::MoveOutputDown);
 
 
+        // Default 3-finger touchpad gestures, one-to-one with the same
+        // animations `MoveUpStack`/`MoveDownStack`/`FocusNextTag`/
+        // `FocusPreviousTag` already play from the keyboard — see
+        // `gesture.rs` for how a bound gesture actually drives them.
+        // Up/down move the focused window up/down the stack; left/right
+        // slide to the next/previous tag, matching the direction the
+        // incoming tag visually slides in from (see
+        // `TagSlideAnimation::direction`'s doc comment): swiping left
+        // brings the tag on the right into view, and vice versa.
+        let mut gesture_map = HashMap::new();
+        gesture_map.insert((3, GestureDirection::Up), Action::MoveUpStack);
+        gesture_map.insert((3, GestureDirection::Down), Action::MoveDownStack);
+        gesture_map.insert((3, GestureDirection::Left), Action::FocusNextTag);
+        gesture_map.insert((3, GestureDirection::Right), Action::FocusPreviousTag);
+
         Self {
             map,
             lock_map: HashMap::new(),
+            gesture_map,
             output_positions: HashMap::new(),
             auto_start: Vec::new(),
             execute_commands: Vec::new(),
@@ -623,6 +666,15 @@ fn create_lua(use_alt: bool) -> mlua::Result<Lua> {
 
     lua.globals().set("Key", key_press_table)?;
 
+    let direction_table: Table = lua.create_table()?;
+
+    direction_table.set("up", GestureDirection::Up)?;
+    direction_table.set("down", GestureDirection::Down)?;
+    direction_table.set("left", GestureDirection::Left)?;
+    direction_table.set("right", GestureDirection::Right)?;
+
+    lua.globals().set("Direction", direction_table)?;
+
     Ok(lua)
 }
 
@@ -665,6 +717,27 @@ fn load_config(use_alt: bool, file_text: &str) -> mlua::Result<Config> {
             guard.insert_lock_keypress(keypress.clone(), action.clone());
         }
         guard.insert_keypress(keypress, action);
+        Ok(())
+    })?)?;
+
+    let config_clone = config.clone();
+
+    // gesture(fingers, direction, action) — binds an N-finger touchpad
+    // swipe to an action, e.g.:
+    //   gesture(3, Direction.up, Action.move_up_stack())
+    //   gesture(3, Direction.left, Action.focus_next_tag())
+    // `direction` is one of `Direction.up`/`.down`/`.left`/`.right`.
+    // Bound to `Action.move_up_stack()`/`move_down_stack()` or
+    // `focus_next_tag()`/`focus_previous_tag()` — the same actions that
+    // already animate from a keybinding — the swipe drives that
+    // animation 1:1 with the finger instead of firing it outright; any
+    // other action just fires once, on release, like a key press. Only
+    // one action can be bound per `(fingers, direction)` pair; binding
+    // again overwrites it, same as `bind`.
+    lua.globals().set("gesture", lua.create_function_mut(move |_, (fingers, direction, action): (u32, GestureDirection, Action)| {
+        let config = config_clone.clone();
+        let mut guard = config.borrow_mut();
+        guard.insert_gesture(fingers, direction, action);
         Ok(())
     })?)?;
 

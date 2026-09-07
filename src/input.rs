@@ -1,6 +1,6 @@
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent
+        AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, GestureBeginEvent, GestureEndEvent, GestureSwipeUpdateEvent, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent
     },
     input::{
         keyboard::{FilterResult, Keysym},
@@ -201,6 +201,15 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 let pointer = self.seat.get_pointer().unwrap();
                 pointer.axis(self, frame);
                 pointer.frame(self);
+            }
+            InputEvent::GestureSwipeBegin { event, .. } => {
+                self.gesture_begin(event.fingers());
+            }
+            InputEvent::GestureSwipeUpdate { event, .. } => {
+                self.gesture_update(event.delta_x(), event.delta_y());
+            }
+            InputEvent::GestureSwipeEnd { event, .. } => {
+                self.gesture_end(event.cancelled());
             }
             _ => {}
         }

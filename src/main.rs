@@ -4,6 +4,7 @@ mod handlers;
 
 mod animation;
 mod cursor;
+mod gesture;
 mod grabs;
 mod input;
 mod state;

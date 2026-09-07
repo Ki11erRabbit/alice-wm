@@ -12,7 +12,7 @@ use smithay::{
     }
 };
 
-use crate::{CalloopData, animation::{Animation, MorphFinish, ScaledElement, TagSlideAnimation, WindowMorph, morph_render_elements, shrink_target}, config::{Action, Config, KeyPress, execute_lua_config}, handlers::workspace::WorkspaceManagerState, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputId, OutputInfo, Outputs, TagId}, state::backend::{Backend, udev::UdevData, winit::WinitData}, window::{LayoutInfo, WindowId, WindowRegistry}};
+use crate::{CalloopData, animation::{Animation, MorphFinish, ScaledElement, TagSlideAnimation, WindowMorph, morph_render_elements, shrink_target}, config::{Action, Config, KeyPress, execute_lua_config}, gesture::{ActiveGesture, GestureDirection, Resolved, ResolvedKind, COMMIT_THRESHOLD, DEAD_ZONE, GESTURE_DISTANCE, RELEASE_DURATION_MS}, handlers::workspace::WorkspaceManagerState, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputId, OutputInfo, Outputs, TagId}, state::backend::{Backend, udev::UdevData, winit::WinitData}, window::{LayoutInfo, WindowId, WindowRegistry}};
 
 /// Which way a tag switch between `from` and `to` should slide, for
 /// callers that only have two tag numbers and no other sense of
@@ -105,6 +105,12 @@ pub struct Alice<BackendData: Backend + 'static> {
     /// What the pointer cursor should currently look like, as last reported
     /// by the seat (default arrow, hidden, or a client-provided surface).
     pub cursor_status: smithay::input::pointer::CursorImageStatus,
+
+    /// The touchpad swipe currently in progress, if any — from
+    /// `GestureSwipeBegin` until its matching `GestureSwipeEnd`. See
+    /// `gesture.rs` and `gesture_begin`/`gesture_update`/`gesture_end`
+    /// below.
+    pub gesture: Option<ActiveGesture>,
 }
 
 impl<BackendData: Backend + 'static> Alice<BackendData> {
@@ -200,6 +206,8 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             seat,
 
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
+
+            gesture: None,
         };
         out.apply_keyboard_layout();
         out
@@ -1332,6 +1340,8 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             direction,
             distance,
             animation: Animation::new(Duration::from_millis(250)),
+            old_tag,
+            new_tag: tag,
             outgoing,
             incoming,
         });
@@ -1388,11 +1398,34 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         for (output, anim) in animations {
             if anim.is_finished(now) {
-                for (window, _) in &anim.outgoing {
-                    self.space.unmap_elem(window);
-                }
-                for (window, final_pos) in &anim.incoming {
-                    self.space.map_element(window.clone(), *final_pos, false);
+                if anim.completed(now) {
+                    // Arrived at `new_tag`: finalize exactly as before —
+                    // outgoing tag unmapped for good, incoming tag left
+                    // at its resting position.
+                    for (window, _) in &anim.outgoing {
+                        self.space.unmap_elem(window);
+                    }
+                    for (window, final_pos) in &anim.incoming {
+                        self.space.map_element(window.clone(), *final_pos, false);
+                    }
+                } else {
+                    // A gesture-driven switch that got released back
+                    // toward its start (see `Alice::gesture_end`'s `Tag`
+                    // arm) rather than committed: unwind it instead —
+                    // the "incoming" tag never actually happened, so
+                    // unmap it, put the "outgoing" tag's windows back at
+                    // the position they never actually left, and restore
+                    // the bookkeeping `slide_tag_impl` changed up front
+                    // (`outputs.change_tag`, focus) back to `old_tag`.
+                    for (window, _) in &anim.incoming {
+                        self.space.unmap_elem(window);
+                    }
+                    for (window, base) in &anim.outgoing {
+                        self.space.map_element(window.clone(), *base, false);
+                    }
+                    self.outputs.change_tag(anim.old_tag);
+                    self.apply_tag_focus(output, anim.old_tag);
+                    self.broadcast_workspace_state();
                 }
                 // Not reinserted: this animation is done.
                 continue;
@@ -1825,6 +1858,208 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 self.config.tiling_config.right_handed = !self.config.tiling_config.right_handed;
                 self.relayout(None);
             }
+        }
+    }
+
+    // -------------------------------------------------------------
+    // Touchpad gestures — see `gesture.rs` for the data types these
+    // operate on, and its module doc for the overall design.
+    // -------------------------------------------------------------
+
+    /// Starts tracking a new swipe — called from `GestureSwipeBegin`.
+    /// Nothing actually happens until it clears the dead zone and
+    /// resolves a direction (see `gesture_update`); a swipe that never
+    /// does is just dropped, harmlessly, by `gesture_end`.
+    pub fn gesture_begin(&mut self, fingers: u32) {
+        self.gesture = Some(ActiveGesture::new(fingers));
+    }
+
+    /// Feeds one `GestureSwipeUpdate`'s delta into whatever gesture is
+    /// currently in progress. Once accumulated movement clears
+    /// `DEAD_ZONE`, resolves a direction, looks it up in the config, and
+    /// fires the bound action immediately — for the animatable ones,
+    /// hijacking the animation it started into `Manual` mode (see
+    /// `start_resolved_gesture`). Every update after that just updates
+    /// that animation's progress to match total distance travelled along
+    /// the resolved axis.
+    pub fn gesture_update(&mut self, dx: f64, dy: f64) {
+        // Taken out of `self` rather than borrowed in place: resolving a
+        // direction needs to fire an action, which needs `&mut self` —
+        // impossible while still holding a live borrow of
+        // `self.gesture`. Working on an owned local and putting it back
+        // at the end sidesteps that entirely.
+        let Some(mut gesture) = self.gesture.take() else { return };
+        gesture.total.0 += dx;
+        gesture.total.1 += dy;
+
+        if gesture.resolved.is_none() {
+            if gesture.total.0.abs() < DEAD_ZONE && gesture.total.1.abs() < DEAD_ZONE {
+                self.gesture = Some(gesture);
+                return;
+            }
+
+            let direction = if gesture.total.0.abs() > gesture.total.1.abs() {
+                if gesture.total.0 < 0.0 { GestureDirection::Left } else { GestureDirection::Right }
+            } else if gesture.total.1 < 0.0 {
+                GestureDirection::Up
+            } else {
+                GestureDirection::Down
+            };
+
+            let action = self.config.get_gesture(gesture.fingers, direction).cloned();
+            let kind = match action {
+                Some(action) => self.start_resolved_gesture(action),
+                None => ResolvedKind::Discrete { action: None },
+            };
+            gesture.resolved = Some(Resolved { direction, kind, progress: 0.0 });
+        }
+
+        if let Some(resolved) = gesture.resolved.as_mut() {
+            let magnitude = match resolved.direction {
+                GestureDirection::Up | GestureDirection::Down => gesture.total.1.abs(),
+                GestureDirection::Left | GestureDirection::Right => gesture.total.0.abs(),
+            };
+            let progress = (magnitude / GESTURE_DISTANCE).clamp(0.0, 1.0);
+            resolved.progress = progress;
+
+            match &resolved.kind {
+                ResolvedKind::Tag { output } => {
+                    if let Some(anim) = self.tag_animations.get_mut(output) {
+                        anim.animation.set_manual_progress(progress);
+                    }
+                }
+                ResolvedKind::Stack { keys, .. } => {
+                    for key in keys {
+                        if let Some(morph) = self.window_morphs.get_mut(key) {
+                            morph.animation.set_manual_progress(progress);
+                        }
+                    }
+                }
+                ResolvedKind::Discrete { .. } => {}
+            }
+        }
+
+        self.gesture = Some(gesture);
+        Backend::schedule_render(self);
+    }
+
+    /// Ends whatever gesture is in progress — called from
+    /// `GestureSwipeEnd`. A swipe that never resolved a direction is
+    /// just dropped. One that did either commits (if not `cancelled` and
+    /// it travelled far enough — see `COMMIT_THRESHOLD`) or cancels; in
+    /// both cases handing off to a short eased settle rather than
+    /// snapping straight to the result.
+    pub fn gesture_end(&mut self, cancelled: bool) {
+        let Some(gesture) = self.gesture.take() else { return };
+        let Some(resolved) = gesture.resolved else { return };
+        let commit = !cancelled && resolved.progress >= COMMIT_THRESHOLD;
+        let now = Instant::now();
+        let release_duration = Duration::from_millis(RELEASE_DURATION_MS);
+
+        match resolved.kind {
+            ResolvedKind::Tag { output } => {
+                if let Some(anim) = self.tag_animations.get_mut(&output) {
+                    let target = if commit { 1.0 } else { 0.0 };
+                    anim.animation = anim.animation.release_to(now, target, release_duration);
+                }
+            }
+            ResolvedKind::Stack { keys, undo } => {
+                if commit {
+                    for key in &keys {
+                        if let Some(morph) = self.window_morphs.get_mut(key) {
+                            morph.animation = morph.animation.release_to(now, 1.0, release_duration);
+                        }
+                    }
+                } else {
+                    // Re-fire the opposite action: this both reverts the
+                    // stack reorder itself and — since
+                    // `start_window_morph_impl` continues smoothly from
+                    // a morph's *current* rect when one's already
+                    // mid-animation for that window — eases back from
+                    // wherever the drag currently sits rather than
+                    // snapping to the start first.
+                    self.handle_action(undo);
+                }
+            }
+            ResolvedKind::Discrete { action } => {
+                if commit && let Some(action) = action {
+                    self.handle_action(action);
+                }
+            }
+        }
+
+        Backend::schedule_render(self);
+    }
+
+    /// Fires `action` immediately — exactly as if it were bound to a key
+    /// — and, if it started an animatable transition, hijacks that
+    /// animation into `Manual` mode so subsequent `gesture_update` calls
+    /// can drive it directly instead of it running out on its own timer.
+    /// Called once, the instant a swipe resolves a direction.
+    fn start_resolved_gesture(&mut self, action: Action) -> ResolvedKind {
+        match action {
+            Action::MoveUpStack | Action::MoveDownStack => {
+                // `move_up`/`move_down` reorder the stack and relayout,
+                // which creates a `WindowMorph` per window whose rect
+                // actually changed (see `apply_rects`) — usually the two
+                // that got swapped. Diffing the key set before/after,
+                // rather than assuming which windows, keeps this correct
+                // regardless of how many rects a given layout ends up
+                // changing.
+                let before: std::collections::HashSet<ObjectId> =
+                    self.window_morphs.keys().cloned().collect();
+                self.handle_action(action.clone());
+                let keys: Vec<ObjectId> = self.window_morphs.keys()
+                    .filter(|key| !before.contains(*key))
+                    .cloned()
+                    .collect();
+
+                if keys.is_empty() {
+                    // Nothing actually moved (e.g. only one window on
+                    // this tag) — nothing to drive.
+                    return ResolvedKind::Discrete { action: None };
+                }
+
+                for key in &keys {
+                    if let Some(morph) = self.window_morphs.get_mut(key) {
+                        // Snap back to progress 0 — i.e. exactly the
+                        // pre-swap rects — since the finger hasn't
+                        // actually moved (past the dead zone) yet. From
+                        // here, `gesture_update` drives it forward.
+                        morph.animation = Animation::manual(0.0);
+                    }
+                }
+
+                let undo = match action {
+                    Action::MoveUpStack => Action::MoveDownStack,
+                    Action::MoveDownStack => Action::MoveUpStack,
+                    _ => unreachable!(),
+                };
+                ResolvedKind::Stack { keys, undo }
+            }
+            Action::FocusNextTag | Action::FocusPreviousTag => {
+                let output = self.outputs.get_focused().id;
+                let tag_before = self.outputs.get_focused_tag(output);
+                self.handle_action(action.clone());
+                let tag_after = self.outputs.get_focused_tag(output);
+
+                if tag_before == tag_after {
+                    // Already at the first/last tag — `focus_next_tag`/
+                    // `focus_prevous_tag` no-op there, so there's no
+                    // animation to have hijacked.
+                    return ResolvedKind::Discrete { action: None };
+                }
+
+                if let Some(anim) = self.tag_animations.get_mut(&output) {
+                    // Same idea as the stack case above: back to
+                    // progress 0 (fully off-screen incoming tag, fully
+                    // in-place outgoing tag) since the finger hasn't
+                    // moved past the dead zone yet.
+                    anim.animation = Animation::manual(0.0);
+                }
+                ResolvedKind::Tag { output }
+            }
+            other => ResolvedKind::Discrete { action: Some(other) },
         }
     }
 

@@ -20,53 +20,142 @@ use smithay::{
     utils::{Logical, Point},
 };
 
-use crate::layout::Rect;
+use crate::{layout::Rect, output::TagId};
 
-/// A single scalar animation progress value, driven by wall-clock time.
+/// A single scalar animation progress value, either driven by wall-clock
+/// time (`Timed`) or set directly by the caller (`Manual`).
 ///
-/// Construct one with `Animation::new(duration)` at the moment the
-/// animation should start, then call `progress`/`eased_progress` with
+/// Construct a `Timed` one with `Animation::new(duration)` at the moment
+/// the animation should start, then call `progress`/`eased_progress` with
 /// the current time on every frame you render while it's running.
 /// Everything is derived from `start` and `duration` — there's no
-/// mutable "current position" field to keep in sync, which is what
-/// lets this be driven equally well by a render loop ticking every
-/// frame or, for something like a gesture, by input events instead.
+/// mutable "current position" field to keep in sync, which is what lets
+/// this be driven equally well by a render loop ticking every frame.
+///
+/// `Manual` exists for the other case: a touchpad gesture, where there's
+/// no clock to derive progress from — the finger *is* the clock. Build
+/// one with `Animation::manual(0.0)` and call `set_manual_progress` on
+/// every gesture update; `eased_progress` then reports exactly that value
+/// back, unmodified (raw 1:1 tracking, no easing curve, while the finger
+/// is actually driving it — the ease-out curve only kicks back in once
+/// `release_to` hands it off to a `Timed` animation for the finger-up
+/// settle).
 #[derive(Debug, Clone, Copy)]
-pub struct Animation {
-    start: Instant,
-    duration: Duration,
+enum AnimationKind {
+    Timed {
+        start: Instant,
+        duration: Duration,
+        /// The progress value this animation eases *from* — usually
+        /// `0.0`, except when `release_to` hands off from a manual
+        /// (gesture) progress value partway through.
+        from: f64,
+        /// The progress value this animation eases *to* — usually
+        /// `1.0`, except when `release_to` is settling a cancelled
+        /// gesture back to where it started.
+        to: f64,
+    },
+    Manual {
+        progress: f64,
+    },
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct Animation(AnimationKind);
 
 impl Animation {
     pub fn new(duration: Duration) -> Self {
-        Self {
+        Self(AnimationKind::Timed {
             start: Instant::now(),
             duration,
+            from: 0.0,
+            to: 1.0,
+        })
+    }
+
+    /// A gesture-driven animation: progress is whatever `progress` is set
+    /// to (see `set_manual_progress`), not something that advances on its
+    /// own. Used for the touchpad-gesture case — see the type doc above.
+    pub fn manual(progress: f64) -> Self {
+        Self(AnimationKind::Manual {
+            progress: progress.clamp(0.0, 1.0),
+        })
+    }
+
+    /// Overwrites a `Manual` animation's progress — the thing a gesture
+    /// handler calls on every `GestureSwipeUpdate`. A no-op on a `Timed`
+    /// animation; there's no external value to overwrite there.
+    pub fn set_manual_progress(&mut self, progress: f64) {
+        if let AnimationKind::Manual { progress: p } = &mut self.0 {
+            *p = progress.clamp(0.0, 1.0);
         }
+    }
+
+    /// Hands a `Manual` (gesture) animation off to an ordinary `Timed`
+    /// one that eases from wherever it currently sits to `target` (`1.0`
+    /// to complete, `0.0` to cancel back to the start) over `duration`.
+    /// Called the instant a gesture ends: the finger stops driving
+    /// progress, but the motion should still settle smoothly instead of
+    /// snapping straight to `target`.
+    ///
+    /// Works just as well on an already-`Timed` animation — it re-eases
+    /// from that animation's current eased progress instead, which is
+    /// what lets a second gesture (or a keypress) interrupt one that's
+    /// already mid-release without a visible jump.
+    pub fn release_to(&self, now: Instant, target: f64, duration: Duration) -> Animation {
+        Self(AnimationKind::Timed {
+            start: now,
+            duration,
+            from: self.eased_progress(now),
+            to: target,
+        })
     }
 
     /// Linear progress from `0.0` (just started) to `1.0` (finished).
     /// Always clamped to that range, so callers never have to guard
-    /// against overshoot themselves.
+    /// against overshoot themselves. For a `Manual` animation this is
+    /// always `1.0` — there's no "still running" concept, only whatever
+    /// `progress` currently is (see `eased_progress`).
     pub fn progress(&self, now: Instant) -> f64 {
-        if self.duration.is_zero() {
-            return 1.0;
+        match self.0 {
+            AnimationKind::Timed { start, duration, .. } => {
+                if duration.is_zero() {
+                    return 1.0;
+                }
+                let elapsed = now.saturating_duration_since(start).as_secs_f64();
+                (elapsed / duration.as_secs_f64()).clamp(0.0, 1.0)
+            }
+            AnimationKind::Manual { .. } => 1.0,
         }
-        let elapsed = now.saturating_duration_since(self.start).as_secs_f64();
-        (elapsed / self.duration.as_secs_f64()).clamp(0.0, 1.0)
     }
 
     /// `progress`, passed through an ease-out curve: fast to start,
     /// gently settling into place, rather than moving at a constant
     /// speed and stopping abruptly. This is what should actually drive
-    /// on-screen motion in almost every case — `progress` itself is
-    /// mostly useful for checking completion.
+    /// on-screen motion in almost every case.
+    ///
+    /// For a `Manual` animation this is the raw progress value, completely
+    /// unmodified — deliberately: while a gesture is actually driving it,
+    /// the on-screen motion should track the finger exactly, not run it
+    /// through a curve meant for a fire-and-forget timed animation.
     pub fn eased_progress(&self, now: Instant) -> f64 {
-        ease_out_cubic(self.progress(now))
+        match self.0 {
+            AnimationKind::Timed { from, to, .. } => {
+                from + (to - from) * ease_out_cubic(self.progress(now))
+            }
+            AnimationKind::Manual { progress } => progress,
+        }
     }
 
+    /// A `Manual` animation never "finishes" on its own — only
+    /// `release_to`, converting it to `Timed`, can end one. Always
+    /// `false` for `Manual`.
     pub fn is_finished(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.start) >= self.duration
+        match self.0 {
+            AnimationKind::Timed { start, duration, .. } => {
+                now.saturating_duration_since(start) >= duration
+            }
+            AnimationKind::Manual { .. } => false,
+        }
     }
 }
 
@@ -102,6 +191,13 @@ pub struct TagSlideAnimation {
     /// regardless of panels/bars eating into the usable tiling area.
     pub distance: i32,
     pub animation: Animation,
+    /// The tag this switch started on — where a gesture-driven switch
+    /// reverts to if the swipe that started it is released before
+    /// completing (see `completed`/`Alice::gesture_end`'s `Tag` arm).
+    /// Ordinary, non-gesture switches never look at this.
+    pub old_tag: TagId,
+    /// The tag this switch is headed to.
+    pub new_tag: TagId,
     /// The tag being switched away from, at the on-screen position each
     /// window already had (unchanged — these don't move until the
     /// animation starts advancing them).
@@ -139,6 +235,20 @@ impl TagSlideAnimation {
 
     pub fn is_finished(&self, now: Instant) -> bool {
         self.animation.is_finished(now)
+    }
+
+    /// Whether this switch's progress, at `now`, represents "arrived at
+    /// `new_tag`" (`true`) rather than "back where it started, at
+    /// `old_tag`" (`false`). For an ordinary switch — which always eases
+    /// from `0.0` to `1.0` — this is always `true` once finished, so
+    /// existing (non-gesture) callers are unaffected. It only ever comes
+    /// out `false` for a gesture that got released back toward `0.0`
+    /// (see `Animation::release_to`) — i.e. a swipe the user let go of
+    /// before it crossed the commit threshold. `advance_tag_animations`
+    /// uses this to decide, once the animation finishes, whether to
+    /// finalize as "switched" or unwind back to `old_tag`.
+    pub fn completed(&self, now: Instant) -> bool {
+        self.animation.eased_progress(now) >= 0.5
     }
 }
 
