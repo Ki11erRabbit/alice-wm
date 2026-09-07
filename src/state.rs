@@ -656,8 +656,16 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         match previous_rect {
             // Brand new window (never positioned before): play the "grow"
             // animation in from a small, centered placeholder instead of
-            // treating "nothing" -> "its tile" as an ordinary reflow.
-            None => self.start_window_morph(window_obj, output, shrink_target(rect), rect),
+            // treating "nothing" -> "its tile" as an ordinary reflow —
+            // but only if it's actually got a committed buffer to scale.
+            // Before the client's first commit, `geometry()` is 0x0 (see
+            // `apply_floating`'s comment on the same thing); animating
+            // from a zero-sized reference produces no visible content at
+            // all for the whole animation, rather than just skipping it.
+            None if window_obj.geometry().size.w > 0 && window_obj.geometry().size.h > 0 => {
+                self.start_window_morph(window_obj, output, shrink_target(rect), rect)
+            }
+            None => self.space.map_element(window_obj, (rect.x, rect.y), false),
             // An existing window whose rect actually changed — a sibling
             // opened/closed/moved, or this window itself got reordered in
             // the stack: reflow from wherever it was to wherever it's
@@ -1456,6 +1464,12 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             return;
         }
 
+        // TEMPORARY DEBUG — remove once the invisibility issue is found.
+        eprintln!(
+            "start_window_morph: key={:?} output={} from={:?} to={:?} on_finish={:?}",
+            key, output.0, from, to, on_finish
+        );
+
         // Excluded from `Space`'s normal per-element rendering for the
         // duration — see `morph_elements_for_output`, which draws this
         // window itself, scaled, instead.
@@ -1938,8 +1952,20 @@ where
     let morphs = std::mem::take(window_morphs);
     let mut elements = Vec::new();
 
+    // TEMPORARY DEBUG — remove once the invisibility issue is found.
+    eprintln!(
+        "morph_elements_for_output: output_id={} pending_morphs={}",
+        output_id.0,
+        morphs.len()
+    );
+
     for (key, morph) in morphs {
         if morph.output != output_id {
+            // TEMPORARY DEBUG
+            eprintln!(
+                "  skip {:?}: morph.output={} != output_id={}",
+                key, morph.output.0, output_id.0
+            );
             // Not this output's frame to advance — leave it untouched and
             // let that output's own render call handle it.
             window_morphs.insert(key, morph);
@@ -1951,12 +1977,23 @@ where
         // ~180ms close animation) has nothing left to safely render —
         // finish immediately rather than risk drawing a dead surface.
         if !morph.window.alive() || morph.is_finished(now) {
+            // TEMPORARY DEBUG
+            eprintln!(
+                "  finish {:?}: alive={} finished={} on_finish={:?} to={:?}",
+                key, morph.window.alive(), morph.is_finished(now), morph.on_finish, morph.to
+            );
             apply_morph_finish(space, &morph.window, morph.to, morph.on_finish);
             continue;
         }
 
         let rect = morph.current_rect(now);
-        elements.extend(morph_render_elements(renderer, &morph.window, rect, output_origin, scale, 1.0));
+        let produced = morph_render_elements(renderer, &morph.window, rect, output_origin, scale, 1.0);
+        // TEMPORARY DEBUG
+        eprintln!(
+            "  advance {:?}: rect={:?} produced_elements={} window_geometry={:?}",
+            key, rect, produced.len(), morph.window.geometry()
+        );
+        elements.extend(produced);
         window_morphs.insert(key, morph);
     }
 

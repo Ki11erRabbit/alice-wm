@@ -1100,8 +1100,8 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     let elements: Vec<UdevFrameRenderElement<'_>> = cursor_elements
         .into_iter()
         .map(UdevFrameRenderElement::Cursor)
-        .chain(space_elements.into_iter().map(UdevFrameRenderElement::Space))
         .chain(morph_elements.into_iter().map(UdevFrameRenderElement::Morph))
+        .chain(space_elements.into_iter().map(UdevFrameRenderElement::Space))
         .collect();
 
     match surface
