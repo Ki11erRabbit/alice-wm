@@ -661,6 +661,39 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             return;
         }
 
+        // A window whose position is currently owned by some other
+        // in-flight animation — a `WindowMorph` (open/close/reflow/
+        // reorder, see `start_window_morph_impl`), or a `TagSlideAnimation`
+        // sliding the tag it's on in or out (see `slide_tag_impl`) — has
+        // deliberately been taken out of this function's control for the
+        // duration; `advance_tag_animations`/`morph_elements_for_output`
+        // are what's actually moving it, frame to frame, right now.
+        //
+        // As the big comment above explains, `relayout` — and so this
+        // function — gets re-run constantly for reasons that don't
+        // change any given window's target rect at all. Ordinarily
+        // that's harmless: `previous_rect == Some(rect)` below just
+        // falls through to a no-op re-map at the same spot. But for a
+        // window one of those animations currently owns, "the same
+        // spot" means its *resting* position — which is nowhere near
+        // wherever the animation currently has it, and possibly not
+        // even where the animation is instantaneously supposed to be at
+        // all (rest is the value it's animating *toward*, not a
+        // snapshot of "now"). Mapping it there directly would yank it
+        // out from under the animation and snap it to rest immediately,
+        // which is exactly what was making gesture-driven stack moves
+        // (and, less often, tag slides) glitchy: any unrelated relayout
+        // firing while a gesture was still being held — which, per the
+        // comment above, happens all the time — would make the dragged
+        // window instantly jump to its final position mid-drag. So:
+        // skip the direct re-map entirely here and leave it to whichever
+        // animation already owns it; it'll get mapped back into `Space`
+        // itself once that animation actually finishes.
+        let has_live_morph = window_obj.toplevel()
+            .map(|toplevel| self.window_morphs.contains_key(&toplevel.wl_surface().id()))
+            .unwrap_or(false);
+        let tag_sliding = self.tag_animations.contains_key(&output);
+
         match previous_rect {
             // Brand new window (never positioned before): play the "grow"
             // animation in from a small, centered placeholder instead of
@@ -679,7 +712,12 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             // the stack: reflow from wherever it was to wherever it's
             // going.
             Some(old) if old != rect => self.start_window_morph(window_obj, output, old, rect),
-            // Rect didn't actually change — nothing to animate.
+            // Rect didn't actually change, but something else already
+            // owns this window's position for now (see the comment
+            // above) — leave it alone rather than snapping it to rest.
+            _ if has_live_morph || tag_sliding => {}
+            // Rect didn't actually change, and nothing else has a claim
+            // on this window's position either — nothing to animate.
             _ => self.space.map_element(window_obj, (rect.x, rect.y), false),
         }
         //,eprintln!("apply_rects: window {:?} -> {:?}", id, rect);
@@ -1353,20 +1391,57 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         Some(())
     }
 
-    /// Immediately completes whatever tag-switch animation is running on
-    /// `output`, if any: unmaps the outgoing windows and snaps the
-    /// incoming windows to their exact resting position. Used both when a
-    /// new slide interrupts an old one and by `advance_tag_animations` once
-    /// an animation's duration has actually elapsed.
+    /// Immediately stops whatever tag-switch animation is running on
+    /// `output`, if any, and finalizes it — direction-aware, via
+    /// `finalize_tag_animation` below. Used when a new slide interrupts
+    /// an old one, so the old one doesn't linger half-finished forever.
     fn finish_tag_animation(&mut self, output: OutputId) {
         let Some(anim) = self.tag_animations.remove(&output) else {
             return;
         };
-        for (window, _) in &anim.outgoing {
-            self.space.unmap_elem(window);
-        }
-        for (window, final_pos) in &anim.incoming {
-            self.space.map_element(window.clone(), *final_pos, false);
+        let now = Instant::now();
+        self.finalize_tag_animation(output, anim, now);
+    }
+
+    /// The actual "this animation is over, make the final state stick"
+    /// logic, shared by `finish_tag_animation` (interrupted early) and
+    /// `advance_tag_animations` (ran to its natural end) — both need
+    /// exactly the same direction-aware finalize, and having two copies
+    /// is exactly how this went wrong before: `finish_tag_animation`
+    /// used to always assume "arrived at `new_tag`", which is only true
+    /// for an ordinary switch. A gesture that got released back toward
+    /// `old_tag` (see `Alice::gesture_end`'s `Tag` arm) is still
+    /// *finishing* — just in the other direction — and interrupting it
+    /// (by immediately swiping again, say) has to respect that, or the
+    /// interrupted switch gets snapped to the wrong tag before the new
+    /// one even starts, which is what produced the "plays in reverse"
+    /// symptom.
+    fn finalize_tag_animation(&mut self, output: OutputId, anim: TagSlideAnimation, now: Instant) {
+        if anim.completed(now) {
+            // Arrived at `new_tag`: outgoing tag unmapped for good,
+            // incoming tag left at its resting position.
+            for (window, _) in &anim.outgoing {
+                self.space.unmap_elem(window);
+            }
+            for (window, final_pos) in &anim.incoming {
+                self.space.map_element(window.clone(), *final_pos, false);
+            }
+        } else {
+            // Never actually got there (or was on its way back): the
+            // "incoming" tag never happened, so unmap it, put the
+            // "outgoing" tag's windows back at the position they never
+            // actually left, and restore the bookkeeping `slide_tag_impl`
+            // changed up front (`outputs.change_tag`, focus) back to
+            // `old_tag`.
+            for (window, _) in &anim.incoming {
+                self.space.unmap_elem(window);
+            }
+            for (window, base) in &anim.outgoing {
+                self.space.map_element(window.clone(), *base, false);
+            }
+            self.outputs.change_tag(anim.old_tag);
+            self.apply_tag_focus(output, anim.old_tag);
+            self.broadcast_workspace_state();
         }
     }
 
@@ -1398,35 +1473,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         for (output, anim) in animations {
             if anim.is_finished(now) {
-                if anim.completed(now) {
-                    // Arrived at `new_tag`: finalize exactly as before —
-                    // outgoing tag unmapped for good, incoming tag left
-                    // at its resting position.
-                    for (window, _) in &anim.outgoing {
-                        self.space.unmap_elem(window);
-                    }
-                    for (window, final_pos) in &anim.incoming {
-                        self.space.map_element(window.clone(), *final_pos, false);
-                    }
-                } else {
-                    // A gesture-driven switch that got released back
-                    // toward its start (see `Alice::gesture_end`'s `Tag`
-                    // arm) rather than committed: unwind it instead —
-                    // the "incoming" tag never actually happened, so
-                    // unmap it, put the "outgoing" tag's windows back at
-                    // the position they never actually left, and restore
-                    // the bookkeeping `slide_tag_impl` changed up front
-                    // (`outputs.change_tag`, focus) back to `old_tag`.
-                    for (window, _) in &anim.incoming {
-                        self.space.unmap_elem(window);
-                    }
-                    for (window, base) in &anim.outgoing {
-                        self.space.map_element(window.clone(), *base, false);
-                    }
-                    self.outputs.change_tag(anim.old_tag);
-                    self.apply_tag_focus(output, anim.old_tag);
-                    self.broadcast_workspace_state();
-                }
+                self.finalize_tag_animation(output, anim, now);
                 // Not reinserted: this animation is done.
                 continue;
             }
@@ -1925,13 +1972,21 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             match &resolved.kind {
                 ResolvedKind::Tag { output } => {
                     if let Some(anim) = self.tag_animations.get_mut(output) {
-                        anim.animation.set_manual_progress(progress);
+                        // Reassigned outright rather than mutated
+                        // in-place: if some unrelated relayout raced in
+                        // and replaced this with a fresh `Timed`
+                        // animation since our last update, mutating the
+                        // old `Animation` in place wouldn't touch the
+                        // new one at all, and this gesture would quietly
+                        // stop tracking the finger. An outright
+                        // reassignment can't have that problem.
+                        anim.animation = Animation::manual(progress);
                     }
                 }
                 ResolvedKind::Stack { keys, .. } => {
                     for key in keys {
                         if let Some(morph) = self.window_morphs.get_mut(key) {
-                            morph.animation.set_manual_progress(progress);
+                            morph.animation = Animation::manual(progress);
                         }
                     }
                 }
@@ -2000,19 +2055,31 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         match action {
             Action::MoveUpStack | Action::MoveDownStack => {
                 // `move_up`/`move_down` reorder the stack and relayout,
-                // which creates a `WindowMorph` per window whose rect
-                // actually changed (see `apply_rects`) — usually the two
-                // that got swapped. Diffing the key set before/after,
-                // rather than assuming which windows, keeps this correct
-                // regardless of how many rects a given layout ends up
-                // changing.
-                let before: std::collections::HashSet<ObjectId> =
-                    self.window_morphs.keys().cloned().collect();
+                // which creates (or, for a window already mid-morph from
+                // a previous rapid swipe, *replaces*) a `WindowMorph` per
+                // window whose rect actually changed (see `apply_rects`)
+                // — usually the two that got swapped. Snapshotting each
+                // entry's `to` rect before, rather than just which keys
+                // exist, is what catches the replaced case too: a key
+                // that already existed but now targets a different rect
+                // got a brand new `Timed` animation from
+                // `start_window_morph_impl`, and needs hijacking into
+                // `Manual` exactly the same as one that didn't exist at
+                // all before — missing that was leaving some windows
+                // animating on their own 180ms clock instead of tracking
+                // the new gesture, which is what made rapid repeated
+                // swipes look glitchy.
+                let mut before: std::collections::HashMap<ObjectId, Rect> = std::collections::HashMap::new();
+                for (key, morph) in self.window_morphs.iter() {
+                    before.insert(key.clone(), morph.to);
+                }
                 self.handle_action(action.clone());
-                let keys: Vec<ObjectId> = self.window_morphs.keys()
-                    .filter(|key| !before.contains(*key))
-                    .cloned()
-                    .collect();
+                let mut keys: Vec<ObjectId> = Vec::new();
+                for (key, morph) in self.window_morphs.iter() {
+                    if before.get(key) != Some(&morph.to) {
+                        keys.push(key.clone());
+                    }
+                }
 
                 if keys.is_empty() {
                     // Nothing actually moved (e.g. only one window on

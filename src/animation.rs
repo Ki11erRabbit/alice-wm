@@ -34,12 +34,15 @@ use crate::{layout::Rect, output::TagId};
 ///
 /// `Manual` exists for the other case: a touchpad gesture, where there's
 /// no clock to derive progress from — the finger *is* the clock. Build
-/// one with `Animation::manual(0.0)` and call `set_manual_progress` on
-/// every gesture update; `eased_progress` then reports exactly that value
-/// back, unmodified (raw 1:1 tracking, no easing curve, while the finger
-/// is actually driving it — the ease-out curve only kicks back in once
-/// `release_to` hands it off to a `Timed` animation for the finger-up
-/// settle).
+/// one with `Animation::manual(progress)` — reassigning it outright on
+/// every gesture update, rather than mutating one in place, so a gesture
+/// handler can't be fooled by some unrelated relayout having swapped the
+/// animation out for a `Timed` one in the meantime (see
+/// `Alice::gesture_update` in `state.rs`). `eased_progress` then reports
+/// exactly that value back, unmodified (raw 1:1 tracking, no easing
+/// curve, while the finger is actually driving it — the ease-out curve
+/// only kicks back in once `release_to` hands it off to a `Timed`
+/// animation for the finger-up settle).
 #[derive(Debug, Clone, Copy)]
 enum AnimationKind {
     Timed {
@@ -73,21 +76,11 @@ impl Animation {
     }
 
     /// A gesture-driven animation: progress is whatever `progress` is set
-    /// to (see `set_manual_progress`), not something that advances on its
-    /// own. Used for the touchpad-gesture case — see the type doc above.
+    /// to. Used for the touchpad-gesture case — see the type doc above.
     pub fn manual(progress: f64) -> Self {
         Self(AnimationKind::Manual {
             progress: progress.clamp(0.0, 1.0),
         })
-    }
-
-    /// Overwrites a `Manual` animation's progress — the thing a gesture
-    /// handler calls on every `GestureSwipeUpdate`. A no-op on a `Timed`
-    /// animation; there's no external value to overwrite there.
-    pub fn set_manual_progress(&mut self, progress: f64) {
-        if let AnimationKind::Manual { progress: p } = &mut self.0 {
-            *p = progress.clamp(0.0, 1.0);
-        }
     }
 
     /// Hands a `Manual` (gesture) animation off to an ordinary `Timed`
