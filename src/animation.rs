@@ -20,6 +20,8 @@ use smithay::{
     utils::{Logical, Point},
 };
 
+use crate::layout::Rect;
+
 /// A single scalar animation progress value, driven by wall-clock time.
 ///
 /// Construct one with `Animation::new(duration)` at the moment the
@@ -138,4 +140,216 @@ impl TagSlideAnimation {
     pub fn is_finished(&self, now: Instant) -> bool {
         self.animation.is_finished(now)
     }
+}
+
+// ---------------------------------------------------------------------
+// Window morphs: a single window's box (position AND size) animating
+// independently of Space/layout — grow-in on open, shrink-out on close,
+// and the reflow when a sibling appears/disappears/reorders.
+// ---------------------------------------------------------------------
+
+use smithay::{
+    backend::renderer::{
+        ImportAll, Renderer,
+        element::{Element, Id, RenderElement, AsRenderElements, surface::WaylandSurfaceRenderElement},
+        utils::{CommitCounter, OpaqueRegions},
+    },
+    utils::{Buffer, Physical, Rectangle, Scale, Size, Transform},
+};
+
+/// What to do with a `WindowMorph` once its animation finishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MorphFinish {
+    /// The ordinary case (grow-in, reflow after a sibling changes, stack
+    /// reorder): put the window back under `Space`'s normal rendering, at
+    /// its resting position.
+    Remap,
+    /// The close case: the window is actually gone once this finishes —
+    /// unmap it for good instead of remapping it.
+    Unmap,
+}
+
+/// A window whose on-screen box is animating outside of the normal
+/// layout flow: open (grow from a small placeholder), close (shrink to
+/// one, played in reverse), a stack reorder, or a sibling's reflow. All
+/// of these are the exact same shape — `from` a `Rect`, `to` a `Rect` —
+/// so one struct and one render path cover every case.
+///
+/// Unlike `TagSlideAnimation`, this changes apparent *size*, which
+/// `Space::map_element` can't do — the window is unmapped from `Space`
+/// for the duration (see `Alice::start_window_morph`) and rendered
+/// instead via `morph_render_elements`, which stretches its existing,
+/// already-committed buffer to fill whatever `current_rect` currently
+/// is. The client is only ever sent one real `configure`, to `to`'s
+/// size (see the big comment on `apply_rects`) — every frame in between
+/// is a purely visual stretch of that one buffer, never a new resize
+/// request.
+pub struct WindowMorph {
+    pub window: Window,
+    pub output: crate::output::OutputId,
+    pub animation: Animation,
+    pub from: Rect,
+    pub to: Rect,
+    pub on_finish: MorphFinish,
+}
+
+impl WindowMorph {
+    pub fn current_rect(&self, now: Instant) -> Rect {
+        let t = self.animation.eased_progress(now);
+        Rect {
+            x: lerp(self.from.x, self.to.x, t),
+            y: lerp(self.from.y, self.to.y, t),
+            width: lerp(self.from.width, self.to.width, t),
+            height: lerp(self.from.height, self.to.height, t),
+        }
+    }
+
+    pub fn is_finished(&self, now: Instant) -> bool {
+        self.animation.is_finished(now)
+    }
+}
+
+fn lerp(a: i32, b: i32, t: f64) -> i32 {
+    (a as f64 + (b - a) as f64 * t).round() as i32
+}
+
+/// The small, centered placeholder a window grows out of when it opens
+/// (and shrinks back into, played in reverse, when it closes) — 35% of
+/// its real size on each axis, centered within the same rect.
+pub fn shrink_target(rect: Rect) -> Rect {
+    let w = ((rect.width as f64 * 0.35).round() as i32).max(1);
+    let h = ((rect.height as f64 * 0.35).round() as i32).max(1);
+    Rect {
+        x: rect.x + (rect.width - w) / 2,
+        y: rect.y + (rect.height - h) / 2,
+        width: w,
+        height: h,
+    }
+}
+
+/// Wraps a render element and reports a caller-supplied destination
+/// rectangle instead of the element's own natural one. Everything else
+/// (which buffer, which region of it, orientation) is delegated straight
+/// through to `inner` unchanged — this is deliberately *only* a
+/// destination-rectangle override.
+///
+/// Reporting a `dst` that differs from the buffer's real size is exactly
+/// what makes this "scale" the window at all: `draw` receives back
+/// whatever `geometry()` reports here as its `dst`, and stretches the
+/// unchanged source buffer to fill it — the same src-to-dst blit any
+/// texture-based renderer already needs for fractional scaling. There's
+/// no separate "resize" step; the client's buffer never changes.
+pub struct ScaledElement<E> {
+    inner: E,
+    dst: Rectangle<i32, Physical>,
+}
+
+impl<E> ScaledElement<E> {
+    pub fn new(inner: E, dst: Rectangle<i32, Physical>) -> Self {
+        Self { inner, dst }
+    }
+}
+
+impl<E: Element> Element for ScaledElement<E> {
+    fn id(&self) -> &Id {
+        self.inner.id()
+    }
+    fn current_commit(&self) -> CommitCounter {
+        self.inner.current_commit()
+    }
+    fn src(&self) -> Rectangle<f64, Buffer> {
+        self.inner.src()
+    }
+    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.dst
+    }
+    fn location(&self, _scale: Scale<f64>) -> Point<i32, Physical> {
+        self.dst.loc
+    }
+    fn transform(&self) -> Transform {
+        self.inner.transform()
+    }
+    fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        // Conservative rather than wrong: reporting "no known opaque
+        // region" only costs a (tiny, short-lived-animation-only) missed
+        // blending optimization, never an incorrect picture.
+        OpaqueRegions::from_slice(&[])
+    }
+}
+
+impl<R: Renderer, E: RenderElement<R>> RenderElement<R> for ScaledElement<E> {
+    fn draw(
+        &self,
+        frame: &mut R::Frame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), R::Error> {
+        self.inner.draw(frame, src, dst, damage, opaque_regions)
+    }
+}
+
+/// Builds the render elements for one morphing window at `rect` (its
+/// *current*, in-between-frame box — see `WindowMorph::current_rect`).
+///
+/// `output_origin` is that output's own position in `Space`'s global
+/// logical coordinates (`Space::output_geometry(output).loc`) — `rect`
+/// is in that same global space (it comes straight from the layout
+/// engine, same as everything `apply_rects` hands to
+/// `Space::map_element`), and needs converting to output-local physical
+/// pixels before it means anything to a renderer, the same conversion
+/// `Space`'s own rendering does internally.
+///
+/// Multi-part windows (subsurfaces) are scaled as one rigid group: each
+/// of the window's own render elements keeps its position *relative to
+/// the window's top-left*, just uniformly scaled by the same factor as
+/// the window as a whole, rather than every subsurface being
+/// independently stretched to fill the whole target box.
+pub fn morph_render_elements<R>(
+    renderer: &mut R,
+    window: &Window,
+    rect: Rect,
+    output_origin: Point<i32, Logical>,
+    scale: f64,
+    alpha: f32,
+) -> Vec<ScaledElement<WaylandSurfaceRenderElement<R>>>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    // The window's real, currently-configured size — never changes
+    // mid-animation (see the module doc on `WindowMorph`), so it's the
+    // fixed reference every frame's scale factor is computed against.
+    let base = window.geometry().size;
+    if base.w <= 0 || base.h <= 0 {
+        return Vec::new();
+    }
+    let kx = rect.width as f64 / base.w as f64;
+    let ky = rect.height as f64 / base.h as f64;
+
+    let physical_scale = Scale::from(scale);
+    let elements: Vec<WaylandSurfaceRenderElement<R>> =
+        AsRenderElements::<R>::render_elements(window, renderer, (0, 0).into(), physical_scale, alpha);
+
+    let local_x = rect.x - output_origin.x;
+    let local_y = rect.y - output_origin.y;
+    let target_origin: Point<i32, Physical> =
+        Point::<i32, Logical>::from((local_x, local_y)).to_physical_precise_round(scale);
+
+    elements
+        .into_iter()
+        .map(|element| {
+            let geo = element.geometry(physical_scale);
+            let loc: Point<i32, Physical> = Point::from((
+                target_origin.x + (geo.loc.x as f64 * kx).round() as i32,
+                target_origin.y + (geo.loc.y as f64 * ky).round() as i32,
+            ));
+            let size: Size<i32, Physical> = Size::from((
+                ((geo.size.w as f64 * kx).round() as i32).max(1),
+                ((geo.size.h as f64 * ky).round() as i32).max(1),
+            ));
+            ScaledElement::new(element, Rectangle::new(loc, size))
+        })
+        .collect()
 }

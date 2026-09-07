@@ -62,11 +62,16 @@ type UdevRenderElement<'a> =
     SpaceRenderElements<UdevRenderer<'a>, <Window as AsRenderElements<UdevRenderer<'a>>>::RenderElement>;
 
 /// Everything actually handed to the DRM compositor for a frame: the
-/// space's contents plus the software cursor drawn on top.
+/// space's contents, the software cursor drawn on top, and any windows
+/// currently animating a box change (open/close/reorder/reflow — see
+/// `animation.rs`), drawn scaled instead of through `Space`'s normal
+/// per-element path (they're unmapped from `Space` for exactly this
+/// reason while animating — see `Alice::start_window_morph`).
 smithay::backend::renderer::element::render_elements! {
     UdevFrameRenderElement<='a, UdevRenderer<'a>>;
     Space=UdevRenderElement<'a>,
     Cursor=crate::cursor::PointerRenderElement<UdevRenderer<'a>>,
+    Morph=crate::animation::ScaledElement<WaylandSurfaceRenderElement<UdevRenderer<'a>>>,
 }
 
 pub struct GpuBackendData {
@@ -1004,23 +1009,30 @@ fn output_space_elements<'a>(
 }
 
 fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle) {
+    // Advance any in-flight tag-slide animations first, before anything
+    // else in this function. This needs a full `&mut alice` — once
+    // `renderer` is acquired just below, it holds a borrow of
+    // `alice.backend_data.gpus` for the rest of the function, and nothing
+    // requiring `&mut alice` as a whole can run after that (that's the
+    // E0499 this was hitting when the call sat further down).
+    //
+    // Unlike the winit backend, this render path only runs again once the
+    // previous frame's pageflip completes (`frame_finish`, further up
+    // this file, calls back into `render_surface`) or something external
+    // asks for a redraw (`schedule_render`) — there's no free-running
+    // loop to piggyback on. Updating animated positions here is still
+    // enough on its own though: as long as a position actually changed
+    // this frame, `render_frame` below reports damage, which makes this
+    // backend queue and later flip a frame, which is what triggers the
+    // next `frame_finish` call — so the chain keeps this function
+    // re-running every frame for exactly as long as any animation on
+    // this output has a position left to update, then stops itself the
+    // moment there's nothing left to change.
+    alice.advance_tag_animations();
+
     let Some(render_node) = alice.backend_data.backends.get(&node).and_then(|b| b.render_node) else {
         return;
     };
-
-    // Unlike the winit backend, this render path only runs again once the
-    // previous frame's pageflip completes (`frame_finish`, further up this
-    // file, calls back into `render_surface`) or something external asks
-    // for a redraw (`schedule_render`) — there's no free-running loop to
-    // piggyback on. Updating animated positions here, right before
-    // gathering render elements, is still enough on its own though: as
-    // long as a position actually changed this frame, `render_frame`
-    // below reports damage, which makes this backend queue and later flip
-    // a frame, which is what triggers the next `frame_finish` call — so
-    // the chain keeps this function re-running every frame for exactly as
-    // long as any animation on this output has a position left to update,
-    // then stops itself the moment there's nothing left to change.
-    alice.advance_tag_animations();
 
     let mut renderer = match alice.backend_data.gpus.single_renderer(&render_node) {
         Ok(r) => r,
@@ -1037,7 +1049,6 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         return;
     };
     let output = surface.output.clone();
-
 
     let Some(scope) = output_scope(&alice.outputs, &output) else {
         return;
@@ -1074,10 +1085,23 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
             output_scale,
         );
 
+    // Any window currently animating a box change (open/close/reorder/
+    // reflow) is drawn here, scaled, instead of through `Space`'s normal
+    // per-element path above — see the doc comment on `UdevFrameRenderElement`.
+    let morph_elements = crate::state::morph_elements_for_output(
+        &mut renderer,
+        &mut alice.window_morphs,
+        &mut alice.space,
+        scope.output,
+        output_geo.loc,
+        output.current_scale().fractional_scale(),
+    );
+
     let elements: Vec<UdevFrameRenderElement<'_>> = cursor_elements
         .into_iter()
         .map(UdevFrameRenderElement::Cursor)
         .chain(space_elements.into_iter().map(UdevFrameRenderElement::Space))
+        .chain(morph_elements.into_iter().map(UdevFrameRenderElement::Morph))
         .collect();
 
     match surface

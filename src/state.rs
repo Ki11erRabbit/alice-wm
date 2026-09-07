@@ -3,16 +3,27 @@ pub mod backend;
 use std::{collections::{HashMap, HashSet}, ffi::OsString, sync::Arc, time::{Duration, Instant}};
 
 use smithay::{
-    backend::renderer::{Renderer, element::{AsRenderElements, RenderElement}}, desktop::{PopupManager, Space, Window, WindowSurfaceType, layer_map_for_output, space::space_render_elements}, input::{Seat, SeatState, keyboard::{Keysym, ModifiersState}}, output::Output, reexports::{
+    backend::renderer::{Renderer, ImportAll, element::{AsRenderElements, RenderElement, surface::WaylandSurfaceRenderElement}}, desktop::{PopupManager, Space, Window, WindowSurfaceType, layer_map_for_output, space::space_render_elements}, input::{Seat, SeatState, keyboard::{Keysym, ModifiersState}}, output::Output, reexports::{
         calloop::{EventLoop, Interest, LoopSignal, Mode, PostAction, generic::Generic}, wayland_protocols::xdg::shell::server::xdg_toplevel, wayland_server::{
-            Display, DisplayHandle, backend::{ClientData, ClientId, DisconnectReason}, protocol::{wl_output::WlOutput, wl_surface::WlSurface}
+            Display, DisplayHandle, Resource, backend::{ClientData, ClientId, DisconnectReason, ObjectId}, protocol::{wl_output::WlOutput, wl_surface::WlSurface}
         }
-    }, utils::{Logical, Point, SERIAL_COUNTER}, wayland::{
+    }, utils::{IsAlive, Logical, Point, SERIAL_COUNTER}, wayland::{
         compositor::{CompositorClientState, CompositorState}, fractional_scale::FractionalScaleManagerState, output::OutputManagerState, selection::data_device::DataDeviceState, session_lock::{LockSurface, SessionLockManagerState, SessionLocker}, shell::{wlr_layer::{self, WlrLayerShellState}, xdg::XdgShellState}, shm::ShmState, socket::ListeningSocketSource, viewporter::ViewporterState
     }
 };
 
-use crate::{CalloopData, animation::{Animation, TagSlideAnimation}, config::{Action, Config, KeyPress, execute_lua_config}, handlers::workspace::WorkspaceManagerState, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputId, OutputInfo, Outputs, TagId}, state::backend::{Backend, udev::UdevData, winit::WinitData}, window::{LayoutInfo, WindowId, WindowRegistry}};
+use crate::{CalloopData, animation::{Animation, MorphFinish, ScaledElement, TagSlideAnimation, WindowMorph, morph_render_elements, shrink_target}, config::{Action, Config, KeyPress, execute_lua_config}, handlers::workspace::WorkspaceManagerState, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputId, OutputInfo, Outputs, TagId}, state::backend::{Backend, udev::UdevData, winit::WinitData}, window::{LayoutInfo, WindowId, WindowRegistry}};
+
+/// Which way a tag switch between `from` and `to` should slide, for
+/// callers that only have two tag numbers and no other sense of
+/// direction (a direct "go to tag N", rather than an explicit
+/// next/previous key). Tags lower than where we are now slide as if
+/// "next"; higher ones slide as if "previous" — see `Action::FocusTag`/
+/// `Action::MoveToTag` for where this applies. `focus_next_tag` and
+/// friends don't use this: they already know which way they're going.
+fn tag_direction(from: TagId, to: TagId) -> i32 {
+    if to.0 < from.0 { 1 } else { -1 }
+}
 
 pub struct Alice<BackendData: Backend + 'static> {
     pub backend_data: BackendData,
@@ -36,6 +47,15 @@ pub struct Alice<BackendData: Backend + 'static> {
     /// `animation.rs`). An output with no key means no animation is
     /// running there — tag switches on it are instant.
     pub tag_animations: HashMap<OutputId, TagSlideAnimation>,
+
+    /// One in-flight per-window box animation (open/close/reorder/reflow)
+    /// per window that currently has one running — keyed by the window's
+    /// own `wl_surface` id rather than our recycled `WindowId`, since a
+    /// closing window's `WindowId` slot can be handed to a brand new
+    /// window before its close animation finishes (see
+    /// `start_window_close_morph`). See `animation.rs`'s `WindowMorph` and
+    /// `morph_elements_for_output` for how these are actually drawn.
+    pub window_morphs: HashMap<ObjectId, WindowMorph>,
 
     /// Exposes our tag system to `ext-workspace-v1` clients (waybar's
     /// `ext/workspaces` module, noctalia, etc). See `handlers/workspace.rs`.
@@ -155,6 +175,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             layer_surfaces: LayerRegistry::new(),
             layer_shell_state,
             tag_animations: HashMap::new(),
+            window_morphs: HashMap::new(),
             workspace_manager,
 
             config,
@@ -495,9 +516,24 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
     /// Pass in an scope to target only that output
     pub fn relayout(&mut self, scope: Option<LayoutScope>) {
+        self.relayout_impl(scope, true);
+    }
+
+    /// Same as `relayout`, but skips the automatic reflow/grow/shrink
+    /// animation this normally plays for every window whose rect
+    /// changes (see `apply_rects`). Used only by `slide_tag_impl`, which
+    /// is already animating the very same windows itself — as a whole
+    /// tag sliding across the output — and would otherwise fight with a
+    /// per-window reflow morph trying to animate those same windows to
+    /// those same rects on the same frames.
+    fn relayout_unanimated(&mut self, scope: Option<LayoutScope>) {
+        self.relayout_impl(scope, false);
+    }
+
+    fn relayout_impl(&mut self, scope: Option<LayoutScope>, animate: bool) {
         if let Some(scope) = scope {
             let output = self.outputs.get_id(scope.output).clone();
-            self.relayout_single(output);
+            self.relayout_single(output, animate);
             return;
         }
 
@@ -506,11 +542,11 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             .collect::<Vec<_>>();
 
         for output in outputs {
-            self.relayout_single(output);
+            self.relayout_single(output, animate);
         }
     }
 
-    fn relayout_single(&mut self, output: OutputInfo) {
+    fn relayout_single(&mut self, output: OutputInfo, animate: bool) {
         let tag = self.outputs.get_focused_tag(output.id).unwrap_or(TagId(0));
         let area = self.usable_area(&output.output);
 
@@ -545,7 +581,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         //,eprintln!("relayout_single: area={:?} windows={} rects={:?}", area, windows.len(), rects);
 
         for (id, rect) in windows.iter().zip(rects) {
-            self.apply_rects(*id, rect);
+            self.apply_rects(*id, rect, animate);
         }
         for id in &floating {
             self.apply_floating(*id, area);
@@ -554,7 +590,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         BackendData::schedule_render(self);
     }
 
-    fn apply_rects(&mut self, id: WindowId, rect: Rect) {
+    fn apply_rects(&mut self, id: WindowId, rect: Rect, animate: bool) {
         let Some(window) = self.window_registry.get(&id) else {
             return;
         };
@@ -584,7 +620,13 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         // manufacturing configures nothing asked for. Skip sending one at
         // all when the target (rect, fullscreen) hasn't actually changed
         // since the last one we sent.
+        //
+        // That same `last_configured` bookkeeping doubles as exactly the
+        // "where was this window before" this needs to decide whether
+        // (and how) to animate — captured *before* it gets overwritten
+        // below.
         let target = (rect, window.fullscreen);
+        let previous_rect = window.last_configured.map(|(r, _)| r);
         if window.last_configured != Some(target) {
             window.window.toplevel().unwrap().with_pending_state(|state| {
                 state.size = Some((rect.width, rect.height).into());
@@ -603,7 +645,27 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let Some(window) = self.window_registry.get(&id) else {
             return;
         };
-        self.space.map_element(window.window.clone(), (rect.x, rect.y), false);
+        let window_obj = window.window.clone();
+        let output = window.output;
+
+        if !animate {
+            self.space.map_element(window_obj, (rect.x, rect.y), false);
+            return;
+        }
+
+        match previous_rect {
+            // Brand new window (never positioned before): play the "grow"
+            // animation in from a small, centered placeholder instead of
+            // treating "nothing" -> "its tile" as an ordinary reflow.
+            None => self.start_window_morph(window_obj, output, shrink_target(rect), rect),
+            // An existing window whose rect actually changed — a sibling
+            // opened/closed/moved, or this window itself got reordered in
+            // the stack: reflow from wherever it was to wherever it's
+            // going.
+            Some(old) if old != rect => self.start_window_morph(window_obj, output, old, rect),
+            // Rect didn't actually change — nothing to animate.
+            _ => self.space.map_element(window_obj, (rect.x, rect.y), false),
+        }
         //,eprintln!("apply_rects: window {:?} -> {:?}", id, rect);
     }
 
@@ -718,7 +780,12 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         for id in windows {
             if *id == window {
-                self.apply_rects(window, area);
+                // Entering/exiting fullscreen is a big, deliberate size
+                // change of its own, not the kind of incidental reflow
+                // `apply_rects`'s grow/reflow morph is meant for — keep it
+                // instant rather than stretching a giant scale change
+                // through the same 180ms animation.
+                self.apply_rects(window, area, false);
                 continue
             }
             let Some(window) = self.window_registry.get(id) else {
@@ -909,16 +976,35 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let Some(id) = self.window_registry.find_by_surface(surface) else {
             return;
         };
-        let Some(window) = self.window_registry.get(&id) else {
+        let Some(info) = self.window_registry.get(&id) else {
             return
         };
-        let window = window.window.clone();
+        let window = info.window.clone();
+        let output = info.output;
+        let last_rect = info.last_configured.map(|(rect, _)| rect);
 
         let was_focused = self.window_registry.focused_window() == Some(id);
         let scope_info = self.window_registry.get(&id).map(|i| (i.output, i.tag));
 
         self.window_registry.remove(id);
-        self.space.unmap_elem(&window);
+
+        // Play the "new window" grow animation in reverse: shrink toward
+        // the same small, centered placeholder it would have grown out of
+        // if it were opening right now, and only actually unmap it from
+        // `Space` once that finishes (`start_window_close_morph` handles
+        // both — see `animation.rs`'s `WindowMorph`). It's already gone
+        // from `window_registry` above, so layout for everyone else
+        // (about to be triggered by the `relayout` call after this
+        // returns, in `toplevel_destroyed`) reflows around the gap
+        // immediately, concurrently with this window shrinking on top of
+        // it. A window we never actually got a real rect for (closed
+        // before ever being laid out) has nothing meaningful to shrink
+        // from, so it just unmaps immediately instead.
+        match last_rect {
+            Some(rect) => self.start_window_close_morph(window, output, rect),
+            None => self.space.unmap_elem(&window),
+        }
+
         // Occupancy just changed for whichever tag this window was on —
         // update before any of the focus-handling paths below return early.
         self.broadcast_workspace_state();
@@ -1129,6 +1215,15 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
     /// has a target `TagId` with no inherent direction should keep calling
     /// plain `change_tag` instead.
     pub fn slide_tag(&mut self, tag: TagId, direction: i32) -> Option<()> {
+        self.slide_tag_impl(tag, direction, None)
+    }
+
+    /// The real implementation behind `slide_tag`. `excluded`, when set, is
+    /// a window that's about to change tags (see `move_to_tag`) — it's
+    /// left out of both the outgoing and incoming snapshots below, since
+    /// it doesn't slide off/on with everyone else; the caller morphs it
+    /// into place separately instead.
+    fn slide_tag_impl(&mut self, tag: TagId, direction: i32, excluded: Option<WindowId>) -> Option<()> {
         let old_tag = self.outputs.current_focused_tag()?;
         if old_tag == tag {
             return Some(());
@@ -1148,6 +1243,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         // animation finishes.
         let mut outgoing = Vec::new();
         for id in self.window_registry.filter(&LayoutScope { output: output.id, tag: old_tag }) {
+            if Some(id) == excluded { continue; }
             let Some(info) = self.window_registry.get(&id) else { continue };
             let window = info.window.clone();
             let Some(loc) = self.space.element_location(&window) else { continue };
@@ -1168,13 +1264,19 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 self.space.map_element(info.window.clone(), (0, 0), false);
             }
         }
-        self.relayout(Some(LayoutScope { output: output.id, tag }));
+        // Unanimated: this whole tag switch is already one continuous
+        // animation of its own (the off-screen-start override further
+        // down), so the ordinary per-window grow/reflow morph
+        // `apply_rects` would otherwise trigger here needs to stay out of
+        // the way — see the comment there, and on `relayout_unanimated`.
+        self.relayout_unanimated(Some(LayoutScope { output: output.id, tag }));
 
         // Read back the positions `relayout` just computed — this is each
         // incoming window's final, resting position for the animation to
         // slide *to*.
         let mut incoming = Vec::new();
         for id in self.window_registry.filter(&LayoutScope { output: output.id, tag }) {
+            if Some(id) == excluded { continue; }
             let Some(info) = self.window_registry.get(&id) else { continue };
             let window = info.window.clone();
             let Some(loc) = self.space.element_location(&window) else { continue };
@@ -1301,6 +1403,74 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         }
     }
 
+    /// Starts (or smoothly redirects) a `WindowMorph` for `window`, animating
+    /// its on-screen box from `from` to `to`. Used for the ordinary cases:
+    /// growing in on open, and the reflow when a sibling
+    /// opens/closes/reorders (see `apply_rects`). The close animation
+    /// itself uses `start_window_close_morph` below instead, since it needs
+    /// different finishing behavior.
+    fn start_window_morph(&mut self, window: Window, output: OutputId, from: Rect, to: Rect) {
+        self.start_window_morph_impl(window, output, from, to, MorphFinish::Remap);
+    }
+
+    /// Starts the reverse of the open animation: shrinks `window` from
+    /// `from` toward the same small, centered placeholder it would have
+    /// grown out of, then unmaps it for good — rather than remapping it —
+    /// once that finishes. Called from `remove_window`, *before* the
+    /// window is actually torn down, so there's still a real, on-screen
+    /// box to shrink from.
+    fn start_window_close_morph(&mut self, window: Window, output: OutputId, from: Rect) {
+        let to = shrink_target(from);
+        self.start_window_morph_impl(window, output, from, to, MorphFinish::Unmap);
+    }
+
+    fn start_window_morph_impl(
+        &mut self,
+        window: Window,
+        output: OutputId,
+        mut from: Rect,
+        to: Rect,
+        on_finish: MorphFinish,
+    ) {
+        // Keyed by the surface's own id, not our `WindowId` — see the doc
+        // comment on `Alice::window_morphs` for why (a closing window's
+        // `WindowId` can be recycled onto a brand new window before this
+        // finishes).
+        let Some(key) = window.toplevel().map(|t| t.wl_surface().id()) else {
+            apply_morph_finish(&mut self.space, &window, to, on_finish);
+            return;
+        };
+
+        let now = Instant::now();
+        if let Some(existing) = self.window_morphs.get(&key) {
+            // Already mid-animation — e.g. the stack got reordered again,
+            // or a second close arrived, before the last one finished.
+            // Continue smoothly from wherever it currently is rather than
+            // snapping back to `from`.
+            from = existing.current_rect(now);
+        }
+
+        if from == to {
+            self.window_morphs.remove(&key);
+            apply_morph_finish(&mut self.space, &window, to, on_finish);
+            return;
+        }
+
+        // Excluded from `Space`'s normal per-element rendering for the
+        // duration — see `morph_elements_for_output`, which draws this
+        // window itself, scaled, instead.
+        self.space.unmap_elem(&window);
+        self.window_morphs.insert(key, WindowMorph {
+            window,
+            output,
+            animation: Animation::new(Duration::from_millis(180)),
+            from,
+            to,
+            on_finish,
+        });
+        BackendData::schedule_render(self);
+    }
+
     pub fn move_to_output(&mut self, direction: crate::output::Direction) -> Option<()> {
         let new_output_id = self.select_output_direction(direction)?;
         let info = self.window_registry.get_focused()?;
@@ -1347,16 +1517,24 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         Some(())
     }
 
-    pub fn move_to_tag(&mut self, tag: TagId) -> Option<()> {
+    /// Moves the focused window to `tag` and follows it there. `direction`
+    /// picks which way everyone *else* on the two tags slides (see
+    /// `slide_tag`/`tag_direction`) — the moved window itself doesn't
+    /// slide with them; see the comment below.
+    pub fn move_to_tag(&mut self, tag: TagId, direction: i32) -> Option<()> {
         let info = self.window_registry.get_focused()?;
         let window = info.window.clone();
-        self.space.unmap_elem(&window);
-        let id = self.window_registry.find(window)?;
         let output = info.output;
-        let current_tag = info.tag;
+        let old_tag = info.tag;
+        if old_tag == tag {
+            return Some(());
+        }
+        let old_rect = info.last_configured.map(|(r, _)| r);
+
+        let id = self.window_registry.find(window.clone())?;
         let stack = self.window_registry.get_stack_mut(&LayoutScope {
-            output: info.output,
-            tag: info.tag,
+            output,
+            tag: old_tag,
         })?;
 
         stack.remove_window(id);
@@ -1369,7 +1547,21 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
             window_info.tag = tag;
         }
 
-        self.change_tag(tag)?;
+        // Everyone else on the old and new tags slides off/on exactly like
+        // an ordinary next/previous tag switch. This window is excluded
+        // from that slide (`Some(id)`, below) — it doesn't leave the
+        // screen and come back, it just changes shape — and is carried
+        // separately right after instead.
+        self.slide_tag_impl(tag, direction, Some(id))?;
+
+        // Read back the rect the relayout inside `slide_tag_impl` just
+        // computed for this window on its new tag, and reshape it into
+        // that spot from wherever it was before.
+        let new_rect = self.window_registry.get(&id).and_then(|i| i.last_configured).map(|(r, _)| r);
+        if let (Some(old_rect), Some(new_rect)) = (old_rect, new_rect) {
+            self.start_window_morph(window, output, old_rect, new_rect);
+        }
+
         Some(())
     }
 
@@ -1395,7 +1587,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let mut tag = self.outputs.current_focused_tag()?;
         if tag.0 != 8 {
             tag.0 += 1;
-            self.move_to_tag(tag);
+            self.move_to_tag(tag, 1);
         }
         Some(())
     }
@@ -1404,7 +1596,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let mut tag = self.outputs.current_focused_tag()?;
         let new_tag = tag.0.saturating_sub(1);
         if tag.0 != new_tag {
-            self.move_to_tag(TagId(new_tag));
+            self.move_to_tag(TagId(new_tag), -1);
         }
         Some(())
     }
@@ -1515,10 +1707,20 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 self.spawn(&command);
             }
             Action::FocusTag(id) => {
-                self.change_tag(id);
+                // "Go to tag N" has no inherent direction the way
+                // next/previous does, so it borrows one from where `id`
+                // sits relative to the tag we're currently on — see
+                // `tag_direction`.
+                let direction = self.outputs.current_focused_tag()
+                    .map(|current| tag_direction(current, id))
+                    .unwrap_or(1);
+                self.slide_tag(id, direction);
             }
             Action::MoveToTag(id) => {
-                self.move_to_tag(id);
+                let direction = self.outputs.current_focused_tag()
+                    .map(|current| tag_direction(current, id))
+                    .unwrap_or(1);
+                self.move_to_tag(id, direction);
             }
             Action::FocusNextTag => {
                 self.focus_next_tag();
@@ -1684,6 +1886,81 @@ fn axis_gap(a0: i32, al: i32, b0: i32, bl: i32) -> i32 {
     } else {
         a0 - b1
     }
+}
+
+fn apply_morph_finish(space: &mut Space<Window>, window: &Window, rect: Rect, on_finish: MorphFinish) {
+    match on_finish {
+        MorphFinish::Remap => space.map_element(window.clone(), (rect.x, rect.y), false),
+        MorphFinish::Unmap => space.unmap_elem(window),
+    }
+}
+
+/// Builds this frame's render elements for every in-flight `WindowMorph`
+/// that belongs to `output_id`, advancing (and, once finished,
+/// finalizing) each one along the way. Called once per rendered frame per
+/// output from each backend's render path, right alongside
+/// `Alice::advance_tag_animations`.
+///
+/// A free function taking `space`/`window_morphs` directly, rather than an
+/// `Alice` method, very deliberately — both backends call this with a
+/// `renderer` already borrowed *from* `Alice` (its GPU/backend state), so
+/// a method needing all of `&mut Alice` here as well would conflict with
+/// that live borrow the same way the plain `&mut alice` call in
+/// `advance_tag_animations` briefly did before it was moved earlier in
+/// `render_surface`. Borrowing just these two fields, spelled out
+/// explicitly at each call site (`&mut alice.window_morphs, &mut
+/// alice.space`), is what lets this coexist with a `renderer` still
+/// borrowed from a different field of the same `Alice`.
+///
+/// `output_origin` is that output's own position in `Space` — needed to
+/// convert each morph's rect (in `Space`-global logical coordinates) down
+/// to that output's own physical pixels; see `morph_render_elements`.
+pub fn morph_elements_for_output<R>(
+    renderer: &mut R,
+    window_morphs: &mut HashMap<ObjectId, WindowMorph>,
+    space: &mut Space<Window>,
+    output_id: OutputId,
+    output_origin: Point<i32, Logical>,
+    scale: f64,
+) -> Vec<ScaledElement<WaylandSurfaceRenderElement<R>>>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    if window_morphs.is_empty() {
+        return Vec::new();
+    }
+
+    let now = Instant::now();
+    // Taken out and reinserted rather than iterated in place, same reason
+    // as `Alice::advance_tag_animations`: finalizing needs `&mut space` at
+    // the same time as read access to the morph being finalized.
+    let morphs = std::mem::take(window_morphs);
+    let mut elements = Vec::new();
+
+    for (key, morph) in morphs {
+        if morph.output != output_id {
+            // Not this output's frame to advance — leave it untouched and
+            // let that output's own render call handle it.
+            window_morphs.insert(key, morph);
+            continue;
+        }
+
+        // A window whose underlying surface died mid-animation (the
+        // client crashed, or otherwise tore things down faster than a
+        // ~180ms close animation) has nothing left to safely render —
+        // finish immediately rather than risk drawing a dead surface.
+        if !morph.window.alive() || morph.is_finished(now) {
+            apply_morph_finish(space, &morph.window, morph.to, morph.on_finish);
+            continue;
+        }
+
+        let rect = morph.current_rect(now);
+        elements.extend(morph_render_elements(renderer, &morph.window, rect, output_origin, scale, 1.0));
+        window_morphs.insert(key, morph);
+    }
+
+    elements
 }
 
 #[derive(Default)]

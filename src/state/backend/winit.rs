@@ -32,6 +32,19 @@ use smithay::{
 };
 use crate::{Alice, CalloopData, config::Config, state::backend::Backend};
 
+/// Everything handed to `render_output` alongside the space's own
+/// contents: the software cursor, plus any windows currently animating
+/// a box change (open/close/reorder/reflow — see `animation.rs`) drawn
+/// scaled instead of through `Space`'s normal per-element path. Same
+/// shape as `UdevFrameRenderElement` in `udev.rs`, minus the `Space`
+/// variant since `render_output` already takes the space list separately
+/// here.
+smithay::backend::renderer::element::render_elements! {
+    WinitFrameRenderElement<=GlesRenderer>;
+    Cursor=crate::cursor::PointerRenderElement<GlesRenderer>,
+    Morph=crate::animation::ScaledElement<smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement<GlesRenderer>>,
+}
+
 
 
 pub struct WinitData {
@@ -211,13 +224,39 @@ impl Backend for WinitData {
                                     output_scale,
                                 );
 
+                            // Any window currently animating a box change
+                            // (open/close/reorder/reflow — see
+                            // `animation.rs`) is drawn here, scaled,
+                            // instead of through `Space`'s normal
+                            // per-element path — it's unmapped from
+                            // `Space` for exactly this reason while it's
+                            // animating (see `Alice::start_window_morph`).
+                            let output_id = state.outputs.get(&output.name()).map(|info| info.id);
+                            let morph_elements = match output_id {
+                                Some(id) => crate::state::morph_elements_for_output(
+                                    renderer,
+                                    &mut state.window_morphs,
+                                    &mut state.space,
+                                    id,
+                                    output_geo.loc,
+                                    output.current_scale().fractional_scale(),
+                                ),
+                                None => Vec::new(),
+                            };
+
+                            let mut extra_elements: Vec<WinitFrameRenderElement> = cursor_elements
+                                .into_iter()
+                                .map(WinitFrameRenderElement::Cursor)
+                                .collect();
+                            extra_elements.extend(morph_elements.into_iter().map(WinitFrameRenderElement::Morph));
+
                             // `render_output`'s 4th positional argument is
                             // `alpha` (opacity), not scale — it reads the
                             // output's real scale internally from `output`
                             // itself, so `1.0` here is correct as-is.
                             smithay::desktop::space::render_output::<
                                 _,
-                                crate::cursor::PointerRenderElement<GlesRenderer>,
+                                WinitFrameRenderElement,
                                 _,
                                 _,
                             >(
@@ -227,7 +266,7 @@ impl Backend for WinitData {
                                 1.0,
                                 0,
                                 [&state.space],
-                                &cursor_elements,
+                                &extra_elements,
                                 &mut state.backend_data.damage_tracker,
                                 [0.1, 0.1, 0.1, 1.0],
                             )
