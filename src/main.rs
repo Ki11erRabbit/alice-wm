@@ -2,6 +2,7 @@
 
 mod handlers;
 
+mod animation;
 mod cursor;
 mod grabs;
 mod input;

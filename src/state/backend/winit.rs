@@ -156,6 +156,15 @@ impl Backend for WinitData {
                 WinitEvent::Redraw => {
                     crate::cursor::reset_cursor_if_dead(&mut state.cursor_status);
 
+                    // This backend's redraw already free-runs every frame
+                    // regardless of damage (see `request_redraw()` at the
+                    // bottom of this arm, called unconditionally) — so
+                    // simply updating animated window positions here, right
+                    // before we gather render elements below, is all that's
+                    // needed to animate: `Space` reads positions live and
+                    // the existing loop keeps calling us back every frame.
+                    state.advance_tag_animations();
+
                     let output_geo = state.space.output_geometry(&output).unwrap();
                     let output_scale =
                         smithay::utils::Scale::from(output.current_scale().fractional_scale());

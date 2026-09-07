@@ -1,6 +1,6 @@
 pub mod backend;
 
-use std::{collections::{HashMap, HashSet}, ffi::OsString, sync::Arc};
+use std::{collections::{HashMap, HashSet}, ffi::OsString, sync::Arc, time::{Duration, Instant}};
 
 use smithay::{
     backend::renderer::{Renderer, element::{AsRenderElements, RenderElement}}, desktop::{PopupManager, Space, Window, WindowSurfaceType, layer_map_for_output, space::space_render_elements}, input::{Seat, SeatState, keyboard::{Keysym, ModifiersState}}, output::Output, reexports::{
@@ -12,7 +12,7 @@ use smithay::{
     }
 };
 
-use crate::{CalloopData, config::{Action, Config, KeyPress, execute_lua_config}, handlers::workspace::WorkspaceManagerState, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputId, OutputInfo, Outputs, TagId}, state::backend::{Backend, udev::UdevData, winit::WinitData}, window::{LayoutInfo, WindowId, WindowRegistry}};
+use crate::{CalloopData, animation::{Animation, TagSlideAnimation}, config::{Action, Config, KeyPress, execute_lua_config}, handlers::workspace::WorkspaceManagerState, layer::LayerRegistry, layout::Rect, output::{LayoutRegistry, LayoutScope, OutputId, OutputInfo, Outputs, TagId}, state::backend::{Backend, udev::UdevData, winit::WinitData}, window::{LayoutInfo, WindowId, WindowRegistry}};
 
 pub struct Alice<BackendData: Backend + 'static> {
     pub backend_data: BackendData,
@@ -30,6 +30,12 @@ pub struct Alice<BackendData: Backend + 'static> {
 
     pub layer_surfaces: LayerRegistry,
     pub layer_shell_state: WlrLayerShellState,
+
+    /// One in-flight tag-switch slide animation per output that currently
+    /// has one running (see `slide_tag`/`advance_tag_animations` and
+    /// `animation.rs`). An output with no key means no animation is
+    /// running there — tag switches on it are instant.
+    pub tag_animations: HashMap<OutputId, TagSlideAnimation>,
 
     /// Exposes our tag system to `ext-workspace-v1` clients (waybar's
     /// `ext/workspaces` module, noctalia, etc). See `handlers/workspace.rs`.
@@ -148,6 +154,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
             layer_surfaces: LayerRegistry::new(),
             layer_shell_state,
+            tag_animations: HashMap::new(),
             workspace_manager,
 
             config,
@@ -1069,6 +1076,24 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         }
         self.outputs.change_tag(tag);
 
+        self.apply_tag_focus(output, tag);
+        self.relayout(Some(LayoutScope { output, tag }));
+        self.broadcast_workspace_state();
+        Some(())
+    }
+
+    /// Hands keyboard focus to whichever window is focused on `tag` (or
+    /// clears focus if `tag` has no windows) — the bookkeeping half of a
+    /// tag switch, shared by `change_tag` and `slide_tag`.
+    ///
+    /// Deliberately does *not* call `relayout` or `broadcast_workspace_state`
+    /// itself: `change_tag` and `slide_tag` each need those at a different
+    /// point relative to their own extra steps (`slide_tag` in particular
+    /// must not relayout again after this, or it would snap the incoming
+    /// windows straight to their resting position and skip the animation
+    /// entirely — see the comment in `slide_tag`), so each calls them once,
+    /// itself, in whichever order it needs.
+    fn apply_tag_focus(&mut self, output: OutputId, tag: TagId) {
         let new_focus = self.window_registry
             .get_stack_mut(&LayoutScope { output, tag })
             .and_then(|s| s.focused())
@@ -1089,10 +1114,191 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 keyboard.set_focus(self, Option::<WlSurface>::None, serial);
             }
         }
+    }
 
-        self.relayout(Some(LayoutScope { output, tag }));
+    /// Like `change_tag`, but animates the switch: instead of an instant
+    /// unmap-old/map-new swap, the outgoing tag's windows and the incoming
+    /// tag's windows slide across the output together, as one continuous
+    /// strip, before the outgoing ones are finally unmapped.
+    ///
+    /// `direction` is `1` for "next tag" (the incoming tag slides in from
+    /// the right) and `-1` for "previous tag" (from the left) — see
+    /// `TagSlideAnimation::offset_at` for exactly how that's used. Callers
+    /// that already know which way they're moving (`focus_next_tag`,
+    /// `focus_prevous_tag`) pass it straight through; anything that only
+    /// has a target `TagId` with no inherent direction should keep calling
+    /// plain `change_tag` instead.
+    pub fn slide_tag(&mut self, tag: TagId, direction: i32) -> Option<()> {
+        let old_tag = self.outputs.current_focused_tag()?;
+        if old_tag == tag {
+            return Some(());
+        }
+        let output = self.outputs.get_focused().clone();
+
+        // If a slide is already mid-flight on this output — e.g. the user
+        // pressed the next-tag key twice in quick succession — snap it to
+        // completion first. Starting a second animation on top of an
+        // unfinished one would leave the first one's outgoing windows
+        // mapped and sliding forever, never unmapped.
+        self.finish_tag_animation(output.id);
+
+        // Snapshot the outgoing tag's windows at wherever they currently
+        // sit. Unlike `change_tag`, we deliberately do NOT unmap them here
+        // — they need to stay visible, just sliding away, until the
+        // animation finishes.
+        let mut outgoing = Vec::new();
+        for id in self.window_registry.filter(&LayoutScope { output: output.id, tag: old_tag }) {
+            let Some(info) = self.window_registry.get(&id) else { continue };
+            let window = info.window.clone();
+            let Some(loc) = self.space.element_location(&window) else { continue };
+            outgoing.push((window, loc));
+        }
+
+        // Register the tag switch itself *before* laying out — `relayout`
+        // always arranges whatever tag is currently focused, so this needs
+        // to happen first or it would just re-arrange the tag we're
+        // leaving.
+        self.outputs.change_tag(tag);
+
+        // Map the incoming windows at a (0, 0) placeholder — same first
+        // step `change_tag` takes — then let the normal layout engine give
+        // them their real, correct tiled positions.
+        for id in self.window_registry.filter(&LayoutScope { output: output.id, tag }) {
+            if let Some(info) = self.window_registry.get(&id) {
+                self.space.map_element(info.window.clone(), (0, 0), false);
+            }
+        }
+        self.relayout(Some(LayoutScope { output: output.id, tag }));
+
+        // Read back the positions `relayout` just computed — this is each
+        // incoming window's final, resting position for the animation to
+        // slide *to*.
+        let mut incoming = Vec::new();
+        for id in self.window_registry.filter(&LayoutScope { output: output.id, tag }) {
+            let Some(info) = self.window_registry.get(&id) else { continue };
+            let window = info.window.clone();
+            let Some(loc) = self.space.element_location(&window) else { continue };
+            incoming.push((window, loc));
+        }
+
+        self.apply_tag_focus(output.id, tag);
+        // No `self.relayout(...)` here — see the comment on `apply_tag_focus`.
+        // We already laid out `tag` above, before overriding positions
+        // below; doing it again now would immediately snap the incoming
+        // windows to their resting position and there'd be nothing left to
+        // animate.
         self.broadcast_workspace_state();
+
+        // Distance to slide: the output's own full width, not just the
+        // usable/tiled area, so a window is always fully off-screen before
+        // it's considered "arrived" regardless of panels/bars.
+        let distance = self.space.output_geometry(&output.output)
+            .map(|geo| geo.size.w)
+            .unwrap_or(0);
+
+        if distance == 0 {
+            // Pathological case (output has no geometry yet): fall back to
+            // an instant switch rather than animating nothing.
+            for (window, _) in &outgoing {
+                self.space.unmap_elem(window);
+            }
+            BackendData::schedule_render(self);
+            return Some(());
+        }
+
+        // Move every incoming window off-screen, on the side it should
+        // appear to slide in from, by offsetting the resting position we
+        // just read back. This is exactly `TagSlideAnimation::offset_at`'s
+        // formula at progress 0.0 — see its doc comment.
+        for (window, final_pos) in &incoming {
+            self.space.map_element(
+                window.clone(),
+                (final_pos.x + direction * distance, final_pos.y),
+                false,
+            );
+        }
+
+        self.tag_animations.insert(output.id, TagSlideAnimation {
+            direction,
+            distance,
+            animation: Animation::new(Duration::from_millis(250)),
+            outgoing,
+            incoming,
+        });
+
+        // Kick off the first render; see `advance_tag_animations` for how
+        // this keeps itself rendering every subsequent frame until the
+        // animation ends.
+        BackendData::schedule_render(self);
         Some(())
+    }
+
+    /// Immediately completes whatever tag-switch animation is running on
+    /// `output`, if any: unmaps the outgoing windows and snaps the
+    /// incoming windows to their exact resting position. Used both when a
+    /// new slide interrupts an old one and by `advance_tag_animations` once
+    /// an animation's duration has actually elapsed.
+    fn finish_tag_animation(&mut self, output: OutputId) {
+        let Some(anim) = self.tag_animations.remove(&output) else {
+            return;
+        };
+        for (window, _) in &anim.outgoing {
+            self.space.unmap_elem(window);
+        }
+        for (window, final_pos) in &anim.incoming {
+            self.space.map_element(window.clone(), *final_pos, false);
+        }
+    }
+
+    /// Advances every in-flight tag-switch animation by one frame: moves
+    /// each animating window to its current position for `Instant::now()`,
+    /// or — once an animation's duration has elapsed — finalizes it
+    /// (unmap outgoing, snap incoming to rest) and drops it.
+    ///
+    /// This is the piece that turns a one-off `Space::map_element` call
+    /// into something that looks animated at all: it needs to run once per
+    /// rendered frame for as long as any animation is active. See the
+    /// call sites in `winit.rs`/`udev.rs`'s render paths for how each
+    /// backend arranges to keep calling this — the short version is that
+    /// updating a window's position here produces damage, and damage is
+    /// what makes both backends' existing render loops keep rendering on
+    /// their own, so no separate animation timer is needed.
+    pub fn advance_tag_animations(&mut self) {
+        if self.tag_animations.is_empty() {
+            return;
+        }
+
+        let now = Instant::now();
+        // Taken out and reinserted rather than iterated in place: the loop
+        // body needs `&mut self.space` (to move windows) at the same time
+        // as read access to the animation being advanced, and those can't
+        // both be field-projections of a `self` that's also mutably
+        // borrowed by `self.tag_animations.iter_mut()`.
+        let animations = std::mem::take(&mut self.tag_animations);
+
+        for (output, anim) in animations {
+            if anim.is_finished(now) {
+                for (window, _) in &anim.outgoing {
+                    self.space.unmap_elem(window);
+                }
+                for (window, final_pos) in &anim.incoming {
+                    self.space.map_element(window.clone(), *final_pos, false);
+                }
+                // Not reinserted: this animation is done.
+                continue;
+            }
+
+            let offset = anim.offset_at(now);
+            let shift = anim.direction * anim.distance;
+            for (window, base) in &anim.outgoing {
+                self.space.map_element(window.clone(), (base.x + offset - shift, base.y), false);
+            }
+            for (window, final_pos) in &anim.incoming {
+                self.space.map_element(window.clone(), (final_pos.x + offset, final_pos.y), false);
+            }
+
+            self.tag_animations.insert(output, anim);
+        }
     }
 
     pub fn move_to_output(&mut self, direction: crate::output::Direction) -> Option<()> {
@@ -1171,7 +1377,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let mut tag = self.outputs.current_focused_tag()?;
         if tag.0 != 8 {
             tag.0 += 1;
-            self.change_tag(tag);
+            self.slide_tag(tag, 1);
         }
         Some(())
     }
@@ -1180,7 +1386,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let mut tag = self.outputs.current_focused_tag()?;
         let new_tag = tag.0.saturating_sub(1);
         if tag.0 != new_tag {
-            self.change_tag(TagId(new_tag));
+            self.slide_tag(TagId(new_tag), -1);
         }
         Some(())
     }

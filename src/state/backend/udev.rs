@@ -1008,6 +1008,20 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         return;
     };
 
+    // Unlike the winit backend, this render path only runs again once the
+    // previous frame's pageflip completes (`frame_finish`, further up this
+    // file, calls back into `render_surface`) or something external asks
+    // for a redraw (`schedule_render`) — there's no free-running loop to
+    // piggyback on. Updating animated positions here, right before
+    // gathering render elements, is still enough on its own though: as
+    // long as a position actually changed this frame, `render_frame`
+    // below reports damage, which makes this backend queue and later flip
+    // a frame, which is what triggers the next `frame_finish` call — so
+    // the chain keeps this function re-running every frame for exactly as
+    // long as any animation on this output has a position left to update,
+    // then stops itself the moment there's nothing left to change.
+    alice.advance_tag_animations();
+
     let mut renderer = match alice.backend_data.gpus.single_renderer(&render_node) {
         Ok(r) => r,
         Err(err) => {
@@ -1023,6 +1037,7 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         return;
     };
     let output = surface.output.clone();
+
 
     let Some(scope) = output_scope(&alice.outputs, &output) else {
         return;
