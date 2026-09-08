@@ -17,6 +17,17 @@ pub trait Backend: Sized {
     fn early_import(&mut self, surface: &wl_surface::WlSurface);
     fn update_led_state(&mut self, led_state: LedState);
     fn schedule_render(alice: &mut crate::Alice<Self>);
+    /// Same as `schedule_render`, but scoped to the one output that
+    /// actually has new content — the common case, e.g. a single
+    /// surface's `wl_surface.commit`. Backends that can cheaply target
+    /// just that output's CRTC (see `udev`'s override) should; the
+    /// default here just falls back to re-rendering everything, which
+    /// is always correct, just not free on a multi-output setup where
+    /// most commits only ever affect one of them.
+    fn schedule_render_output(alice: &mut crate::Alice<Self>, output: &Output) {
+        let _ = output;
+        Self::schedule_render(alice);
+    }
     fn make_config() -> Config;
     fn screencopy_id(&mut self) -> GlobalId;
     fn output_physical_size(&self, output: &Output) -> (i32, i32);

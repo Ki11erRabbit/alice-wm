@@ -43,16 +43,27 @@ impl<BackendData: Backend + 'static> CompositorHandler for Alice<BackendData> {
         // `wl_surface::commit` — including subsurface commits (video/canvas
         // layers redrawing at 60+ fps) that never match a window at all —
         // so a linear scan here is pure waste multiplied by client frame rate.
+        //
+        // `root_output` piggybacks on this same lookup: it's the one piece
+        // of information that lets the `schedule_render_output` call below
+        // target just the output this commit can actually affect, instead
+        // of every connected output (see the doc comment on
+        // `Backend::schedule_render_output`/its `udev` override for why
+        // that fan-out matters — a video's own surface commits are exactly
+        // the high-frequency case that makes it expensive on a multi-output
+        // setup).
         let mut root = None;
+        let mut root_output = None;
         if !is_sync_subsurface(surface) {
             let mut r = surface.clone();
             while let Some(parent) = get_parent(&r) {
                 r = parent;
             }
-            if let Some(window) = self.window_registry.find_by_surface(&r)
+            if let Some(info) = self.window_registry.find_by_surface(&r)
                 .and_then(|id| self.window_registry.get(&id))
-                .map(|info| info.window.clone())
             {
+                let window = info.window.clone();
+                root_output = Some(info.output);
                 window.on_commit();
                 root = Some((r, window));
             }
@@ -69,7 +80,21 @@ impl<BackendData: Backend + 'static> CompositorHandler for Alice<BackendData> {
         resize_grab::handle_commit(&mut self.space, surface, own_window);
         wlr_shell::handle_commit(self, surface);
 
-        BackendData::schedule_render(self);
+        match root_output {
+            // We know exactly which output this surface lives on (the
+            // overwhelmingly common case: any toplevel or subsurface
+            // commit, including every video frame) — only that output
+            // needs re-rendering.
+            Some(output_id) => {
+                let output = self.outputs.get_id(output_id).output.clone();
+                BackendData::schedule_render_output(self, &output);
+            }
+            // No associated window (a cursor surface, a not-yet-mapped
+            // popup, etc.) — fall back to the old "render everything"
+            // behavior; these are rare enough that the fan-out cost
+            // doesn't matter.
+            None => BackendData::schedule_render(self),
+        }
     }
 }
 

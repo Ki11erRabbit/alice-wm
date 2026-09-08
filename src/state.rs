@@ -1147,6 +1147,24 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let Some(id) = self.window_registry.find(window.clone()) else {
             return;
         };
+        // Focus-follows-mouse (see `input.rs`'s `PointerMotion` /
+        // `PointerMotionAbsolute` handlers) calls this on *every* pointer
+        // motion sample whose hit-test lands on a window — not just the
+        // sample where the hovered window actually changes. Motion events
+        // arrive far more often than that (a 1000Hz mouse, or just normal
+        // movement across a large window, produces dozens of samples that
+        // all resolve to the same already-focused window). Without this
+        // check, every one of those redundantly re-ran `change_focus`
+        // below: a new keyboard focus serial, a stack reshuffle, and —
+        // worst case — if the hovered window is fullscreen, a full
+        // `relayout` (which unconditionally ends in `schedule_render`,
+        // forcing a whole extra composite/present). That last part means
+        // simply moving the mouse over a fullscreen video or game was
+        // enough to trigger a full relayout-and-redraw on every single
+        // motion sample, which is a lot of avoidable work fighting for
+        // the same frame budget the real rendering needs — worse the
+        // higher the output's refresh rate, since there's less budget
+        // per frame to begin with.
         if self.window_registry.focused_id() == Some(id) {
             return;
         }

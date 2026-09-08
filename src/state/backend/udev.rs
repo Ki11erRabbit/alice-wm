@@ -1,4 +1,4 @@
-use std::{collections::HashMap, os::unix::raw::dev_t, path::Path, time::Duration};
+use std::{collections::HashMap, os::unix::raw::dev_t, path::Path, time::{Duration, Instant}};
 
 use smithay::{
     backend::{
@@ -311,6 +311,46 @@ impl Backend for UdevData {
             .collect();
         //eprintln!("[{:?}] schedule_render: {} targets", alice.start_time.elapsed(), targets.len());
         for (node, crtc) in targets {
+            render_surface(alice, node, crtc);
+        }
+    }
+
+    // The default `schedule_render` above re-renders *every* CRTC on
+    // *every* call — correct, but on a multi-output setup it means a
+    // single `wl_surface.commit` on one monitor (a video frame, a
+    // cursor blink, anything) pays the full cost of re-gathering
+    // elements and running damage tracking for every other connected
+    // monitor too, every single time, regardless of whether they have
+    // anything new to show. That fan-out is silent (each of those other
+    // outputs reports no damage and skips the actual DRM submit — see
+    // `frame_queued` further down in `render_surface`) but not free:
+    // building `output_space_elements` and importing the cursor texture
+    // still happen for all of them. On a 3-output rig, that's roughly
+    // 3x the CPU work behind every commit-triggered redraw, which is
+    // squarely in the kind of overhead that fits inside a 60Hz frame's
+    // budget and doesn't fit inside a 120Hz one.
+    //
+    // `(DrmNode, crtc::Handle)` is stashed on every `Output` at creation
+    // time (see `connector_connected`'s `output.user_data().insert_if_missing`
+    // call) specifically so call sites that already know which output
+    // changed — `compositor.rs`'s commit handler, primarily — can look
+    // it up and render just that one CRTC instead of going through the
+    // default's "every CRTC" path.
+    fn schedule_render_output(alice: &mut Alice<Self>, output: &Output) {
+        let Some(&(node, crtc)) = output.user_data().get::<(DrmNode, crtc::Handle)>() else {
+            // Not (yet) an output this backend knows the CRTC for —
+            // fall back to the safe, do-everything default rather than
+            // silently rendering nothing.
+            return Self::schedule_render(alice);
+        };
+        let pending = alice
+            .backend_data
+            .backends
+            .get(&node)
+            .and_then(|b| b.surfaces.get(&crtc))
+            .map(|s| s.frame_pending)
+            .unwrap_or(true);
+        if !pending {
             render_surface(alice, node, crtc);
         }
     }
@@ -931,7 +971,7 @@ pub fn frame_finish(
     }
 
     surface.frame_pending = false;
-    //eprintln!("[{:?}] frame_finish: crtc={:?} (real vblank)", alice.start_time.elapsed(), crtc);
+    tracing::trace!("[{:?}] frame_finish: crtc={:?} (real vblank)", alice.start_time.elapsed(), crtc);
 
     if alice.locked {
         alice.blanked_outputs.insert(surface.output.clone());
@@ -1105,6 +1145,9 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         .chain(space_elements.into_iter().map(UdevFrameRenderElement::Space))
         .collect();
 
+    let element_count = elements.len();
+    let render_start = Instant::now();
+
     let frame_queued = match surface
         .drm_output
         .render_frame(&mut renderer, &elements, [0.1, 0.1, 0.1, 1.0], FrameFlags::DEFAULT)
@@ -1124,6 +1167,23 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
             false
         }
     };
+
+    // Temporary diagnostic: only fires when a single frame's CPU-side
+    // render_frame()+queue_frame() cost blows past half of a 120Hz
+    // frame's budget (8.3ms total, so 4ms here leaves room for the rest
+    // of render_surface plus actual GPU/DRM submit time on top). A
+    // healthy frame should be well under this; if this line shows up
+    // repeatedly while the lag is happening, that pins the cost on
+    // render_frame itself (texture import, damage computation, or the
+    // GPU work it kicks off) rather than anything upstream in relayout/
+    // focus/animation logic — remove once you've got your answer.
+    let render_elapsed = render_start.elapsed();
+    if render_elapsed > Duration::from_millis(4) {
+        eprintln!(
+            "[{:?}] SLOW FRAME: crtc={:?} elements={} render_frame+queue took {:?}",
+            alice.start_time.elapsed(), crtc, element_count, render_elapsed
+        );
+    }
 
     alice.refresh_fractional_scale_for_output(&output);
 
@@ -1252,7 +1312,7 @@ fn render_lock_surfaces<'a>(
         1.0,
         Kind::Unspecified,
     );
-    eprintln!("render_lock_surfaces: {} elements", elements.len());
+    tracing::trace!("render_lock_surfaces: {} elements", elements.len());
     elements.extend(new_elements);
 
     Ok(elements)

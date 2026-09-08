@@ -39,6 +39,7 @@ dependencies = [
  "mlua",
  "smithay",
  "smithay-drm-extras",
+ "tracing",
  "tracing-subscriber",
  "xdg",
 ]

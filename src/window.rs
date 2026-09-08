@@ -211,10 +211,6 @@ impl WindowRegistry {
         }
     }
 
-    pub fn focused_id(&self) -> Option<WindowId> {
-        self.focused_window
-    }
-
     pub fn len(&self) -> usize {
         self.map.len()
     }
@@ -304,6 +300,14 @@ impl WindowRegistry {
 
     pub fn change_focus(&mut self, id: Option<WindowId>) {
         self.focused_window = id;
+    }
+
+    /// The currently-focused window's id, if any. Lets a caller check
+    /// "is this already the focused window" *before* doing any of the
+    /// work `Alice::change_focus` does to actually focus one — see its
+    /// use in `Alice::focus_window`.
+    pub fn focused_id(&self) -> Option<WindowId> {
+        self.focused_window
     }
 
     pub fn get_focused(&self) -> Option<&WindowInfo> {
