@@ -1174,18 +1174,19 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         .render_frame(&mut renderer, &elements, [0.1, 0.1, 0.1, 1.0], FrameFlags::DEFAULT)
     {
         Ok(res) if !res.is_empty => {
+            let states = res.states;
             if let Err(err) = surface.drm_output.queue_frame(()) {
                 eprintln!("Failed to queue frame on crtc {:?}: {}", crtc, err);
-                false
+                None
             } else {
                 surface.frame_pending = true;
-                true
+                Some(states)
             }
         }
-        Ok(_) => false,
+        Ok(_) => None,
         Err(err) => {
             eprintln!("render_frame failed on crtc {:?}: {:?}", crtc, err);
-            false
+            None
         }
     };
 
@@ -1232,28 +1233,101 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     // Wayland contract — a client only gets told to render again once its
     // last frame was actually shown — so a quiescent scene naturally goes
     // quiet instead of self-sustaining.
-    if frame_queued {
+    //
+    // That fixed the fully-idle case. It did NOT fix this one: every
+    // `send_frame` call below was passing `|_, _| Some(output.clone())`
+    // as its `primary_scan_out_output` closure — unconditionally telling
+    // Smithay "yes, this surface's primary output is this one" for
+    // *every* surface, every time, regardless of whether that surface
+    // actually had anything to do with the frame that just got queued.
+    // `send_frames_surface_tree` (which this ultimately calls) uses that
+    // closure as its main gate — see its doc comment — and only falls
+    // back to the `throttle` duration when the closure says "not on this
+    // output". A hardcoded `Some(output.clone())` always satisfies the
+    // gate, so it never falls through to throttling at all; combined
+    // with the `Duration::ZERO` throttle (which — per that same doc
+    // comment — means "always send even to non-visible surfaces
+    // anyway"), *every* mapped window got the "render your next frame"
+    // signal on *every single flip*, whether or not its own content was
+    // part of that flip. One video window committing at its own frame
+    // rate was enough to wake every other window on the output at the
+    // same rate, including ones with nothing new to show — which is
+    // eager-repainting toolkits' cue to redraw anyway, turning "one
+    // video playing" into "everything on this output redraws every
+    // vblank," measured on real hardware as the compositor sustaining
+    // ~144Hz continuously instead of tracking the video's actual frame
+    // rate.
+    //
+    // The fix: track each surface's *real* primary scan-out output using
+    // Smithay's own `RenderElementStates` from this frame's
+    // `render_frame` result (`states`, captured above), and use the
+    // Smithay-provided `surface_primary_scanout_output` — which reads
+    // that tracked value — as the closure instead of the constant. A
+    // surface that wasn't actually rendered this frame no longer passes
+    // the gate, and falls back to the (now meaningful) throttle instead.
+    if let Some(states) = frame_queued {
+        let time = alice.start_time.elapsed();
+        let throttle = Some(Duration::from_secs(1));
+
         alice.space.elements().for_each(|window| {
-            window.send_frame(&output, alice.start_time.elapsed(), Some(Duration::ZERO), |_, _| {
-                Some(output.clone())
-            })
+            if let Some(toplevel) = window.toplevel() {
+                let surface = toplevel.wl_surface();
+                smithay::desktop::utils::with_surfaces_surface_tree(surface, |surf, surface_data| {
+                    smithay::desktop::utils::update_surface_primary_scanout_output(
+                        surf,
+                        &output,
+                        surface_data,
+                        &states,
+                        |_current_output, _current_state, next_output, _next_state| next_output,
+                    );
+                });
+            }
+            window.send_frame(
+                &output,
+                time,
+                throttle,
+                smithay::desktop::utils::surface_primary_scanout_output,
+            )
         });
         if let Some(id) = alice.outputs.get(&output.name()).map(|info| info.id) {
             if let Some(layers) = alice.layer_surfaces.get(&id) {
                 for layer in layers {
-                    layer.surface.send_frame(&output, alice.start_time.elapsed(), Some(Duration::ZERO), |_, _| {
-                        Some(output.clone())
+                    let surface = layer.surface.wl_surface();
+                    smithay::desktop::utils::with_surfaces_surface_tree(surface, |surf, surface_data| {
+                        smithay::desktop::utils::update_surface_primary_scanout_output(
+                            surf,
+                            &output,
+                            surface_data,
+                            &states,
+                            |_current_output, _current_state, next_output, _next_state| next_output,
+                        );
                     });
+                    layer.surface.send_frame(
+                        &output,
+                        time,
+                        throttle,
+                        smithay::desktop::utils::surface_primary_scanout_output,
+                    );
                 }
             }
         }
         if let Some(lock_surface) = alice.lock_surfaces.get(&output) {
+            let surface = lock_surface.wl_surface();
+            smithay::desktop::utils::with_surfaces_surface_tree(surface, |surf, surface_data| {
+                smithay::desktop::utils::update_surface_primary_scanout_output(
+                    surf,
+                    &output,
+                    surface_data,
+                    &states,
+                    |_current_output, _current_state, next_output, _next_state| next_output,
+                );
+            });
             smithay::desktop::utils::send_frames_surface_tree(
-                lock_surface.wl_surface(),
+                surface,
                 &output,
-                alice.start_time.elapsed(),
-                Some(Duration::ZERO),
-                |_, _| Some(output.clone()),
+                time,
+                throttle,
+                smithay::desktop::utils::surface_primary_scanout_output,
             );
         }
     }
