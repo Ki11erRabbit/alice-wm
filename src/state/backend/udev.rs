@@ -931,7 +931,7 @@ pub fn frame_finish(
     }
 
     surface.frame_pending = false;
-    eprintln!("[{:?}] frame_finish: crtc={:?} (real vblank)", alice.start_time.elapsed(), crtc);
+    //eprintln!("[{:?}] frame_finish: crtc={:?} (real vblank)", alice.start_time.elapsed(), crtc);
 
     if alice.locked {
         alice.blanked_outputs.insert(surface.output.clone());
