@@ -1050,6 +1050,15 @@ fn output_space_elements<'a>(
 }
 
 fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle) {
+    // Temporary diagnostic (paired with the element-gather/render split
+    // further down): covers the *whole* function, since the expensive
+    // part of a new video frame arriving — importing its committed
+    // buffer into a GPU texture — happens lazily inside
+    // `output_space_elements` below, not inside `render_frame` itself.
+    // The earlier version of this diagnostic only timed `render_frame`,
+    // which would have missed exactly that cost.
+    let frame_start = Instant::now();
+
     // Advance any in-flight tag-slide animations first, before anything
     // else in this function. This needs a full `&mut alice` — once
     // `renderer` is acquired just below, it holds a borrow of
@@ -1094,6 +1103,8 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     let Some(scope) = output_scope(&alice.outputs, &output) else {
         return;
     };
+
+    let elements_start = Instant::now();
 
     let space_elements = match output_space_elements(
         &mut renderer,
@@ -1145,6 +1156,16 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         .chain(space_elements.into_iter().map(UdevFrameRenderElement::Space))
         .collect();
 
+    // `output_space_elements` (above) is where a client's committed
+    // buffer actually gets imported as a GPU texture the first time a
+    // render element touches it — see `AsRenderElements`/Smithay's own
+    // internal texture cache. For a freshly-committed video frame,
+    // that's exactly where a cross-GPU (iGPU-decode -> dGPU-display)
+    // copy would show up as real CPU-side cost, so this needs its own
+    // split from `render_frame` below rather than lumping them together
+    // — otherwise a slow import here could hide behind a `render_frame`
+    // number that looks perfectly healthy.
+    let gather_elapsed = elements_start.elapsed();
     let element_count = elements.len();
     let render_start = Instant::now();
 
@@ -1168,20 +1189,21 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
         }
     };
 
-    // Temporary diagnostic: only fires when a single frame's CPU-side
-    // render_frame()+queue_frame() cost blows past half of a 120Hz
-    // frame's budget (8.3ms total, so 4ms here leaves room for the rest
-    // of render_surface plus actual GPU/DRM submit time on top). A
-    // healthy frame should be well under this; if this line shows up
-    // repeatedly while the lag is happening, that pins the cost on
-    // render_frame itself (texture import, damage computation, or the
-    // GPU work it kicks off) rather than anything upstream in relayout/
-    // focus/animation logic — remove once you've got your answer.
+    // Temporary diagnostic: fires when the whole frame — element
+    // gathering (including any texture import) plus render_frame plus
+    // queue_frame — blows past half of a 120Hz frame's budget (8.3ms
+    // total; 4ms here leaves room for whatever's left over plus actual
+    // GPU/DRM submit time on top of that). `gather` vs `render` in the
+    // output tells you which half is actually expensive: a slow
+    // `gather` points at texture import (cross-GPU copy, SHM upload) —
+    // a slow `render` points at `render_frame`/damage tracking/GPU
+    // compositing work itself. Remove once you've got your answer.
     let render_elapsed = render_start.elapsed();
-    if render_elapsed > Duration::from_millis(4) {
+    let total_elapsed = frame_start.elapsed();
+    if total_elapsed > Duration::from_millis(4) {
         eprintln!(
-            "[{:?}] SLOW FRAME: crtc={:?} elements={} render_frame+queue took {:?}",
-            alice.start_time.elapsed(), crtc, element_count, render_elapsed
+            "[{:?}] SLOW FRAME: crtc={:?} elements={} gather={:?} render+queue={:?} total={:?}",
+            alice.start_time.elapsed(), crtc, element_count, gather_elapsed, render_elapsed, total_elapsed
         );
     }
 
