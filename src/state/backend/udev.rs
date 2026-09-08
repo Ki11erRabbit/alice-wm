@@ -352,6 +352,8 @@ impl Backend for UdevData {
             .unwrap_or(true);
         if !pending {
             render_surface(alice, node, crtc);
+        } else {
+            eprintln!("[diag] schedule_render_output({:?}): DROPPED, frame already pending", output.name());
         }
     }
 
@@ -958,10 +960,13 @@ pub fn frame_finish(
     crtc: crtc::Handle,
     _metadata: &mut Option<DrmEventMetadata>,
 ) {
+    eprintln!("[diag] frame_finish ENTER crtc={:?}", crtc);
     let Some(backend) = alice.backend_data.backends.get_mut(&node) else {
+        eprintln!("[diag] frame_finish crtc={:?}: no backend for node {:?}, returning early", crtc, node);
         return;
     };
     let Some(surface) = backend.surfaces.get_mut(&crtc) else {
+        eprintln!("[diag] frame_finish crtc={:?}: no surface for this crtc, returning early", crtc);
         return;
     };
 
@@ -1169,21 +1174,26 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
     let element_count = elements.len();
     let render_start = Instant::now();
 
-    let frame_queued = match surface
+    let render_states = match surface
         .drm_output
         .render_frame(&mut renderer, &elements, [0.1, 0.1, 0.1, 1.0], FrameFlags::DEFAULT)
     {
-        Ok(res) if !res.is_empty => {
-            let states = res.states;
-            if let Err(err) = surface.drm_output.queue_frame(()) {
-                eprintln!("Failed to queue frame on crtc {:?}: {}", crtc, err);
-                None
+        Ok(res) => {
+            if !res.is_empty {
+                if let Err(err) = surface.drm_output.queue_frame(()) {
+                    eprintln!("Failed to queue frame on crtc {:?}: {}", crtc, err);
+                } else {
+                    surface.frame_pending = true;
+                    eprintln!("[diag] render_frame output={:?} crtc={:?}: QUEUED (elements={})", output.name(), crtc, element_count);
+                }
             } else {
-                surface.frame_pending = true;
-                Some(states)
+                eprintln!("[diag] render_frame output={:?} crtc={:?}: NO DAMAGE, nothing queued (elements={})", output.name(), crtc, element_count);
             }
+            // Captured either way — see the big comment below on why a
+            // no-damage pass still needs to hand out frame callbacks to
+            // whichever surfaces were actually on screen.
+            Some(res.states)
         }
-        Ok(_) => None,
         Err(err) => {
             eprintln!("render_frame failed on crtc {:?}: {:?}", crtc, err);
             None
@@ -1210,62 +1220,51 @@ fn render_surface(alice: &mut Alice<UdevData>, node: DrmNode, crtc: crtc::Handle
 
     alice.refresh_fractional_scale_for_output(&output);
 
-    // Only actually tell clients "your last frame was shown, send the next
-    // one" (`wl_surface.frame`'s done callback) when a frame genuinely got
-    // queued to the display above — never unconditionally on every call to
-    // this function. `schedule_render` calls this directly (not just
-    // `frame_finish`, the real page-flip-completion callback) any time
-    // something asks for a redraw while no flip is currently in flight,
-    // and `Ok(_) => {}` above (no damage, nothing queued) is a completely
-    // ordinary outcome of that — most redraws asked for by an input event
-    // or a commit find nothing new to actually display. Sending the "go
-    // ahead" callback anyway, as this used to do regardless of whether
-    // anything was queued, invites every mapped client to immediately
-    // commit again — which promptly asks for another redraw, which (still
-    // often) finds nothing new either, and sends the same invitation
-    // again. With nothing here ever actually gated on a real vsync tick,
-    // that loop runs as fast as the CPU allows, entirely decoupled from
-    // the display's actual refresh rate — which is what produced the
-    // constant redraw storm (tens of thousands of `render_surface` calls
-    // per second, evenly across the whole session, regardless of whether
-    // any window was even open) rather than anything actually tied to
-    // tiling/layout. Gating on `frame_queued` restores the normal
-    // Wayland contract — a client only gets told to render again once its
-    // last frame was actually shown — so a quiescent scene naturally goes
-    // quiet instead of self-sustaining.
+    // Tell clients "your last frame was shown, send the next one"
+    // (`wl_surface.frame`'s done callback) after *every* successful
+    // `render_frame` call — including a no-damage one — not only when
+    // this specific pass queued fresh content.
     //
-    // That fixed the fully-idle case. It did NOT fix this one: every
-    // `send_frame` call below was passing `|_, _| Some(output.clone())`
-    // as its `primary_scan_out_output` closure — unconditionally telling
-    // Smithay "yes, this surface's primary output is this one" for
-    // *every* surface, every time, regardless of whether that surface
-    // actually had anything to do with the frame that just got queued.
-    // `send_frames_surface_tree` (which this ultimately calls) uses that
-    // closure as its main gate — see its doc comment — and only falls
-    // back to the `throttle` duration when the closure says "not on this
-    // output". A hardcoded `Some(output.clone())` always satisfies the
-    // gate, so it never falls through to throttling at all; combined
-    // with the `Duration::ZERO` throttle (which — per that same doc
-    // comment — means "always send even to non-visible surfaces
-    // anyway"), *every* mapped window got the "render your next frame"
-    // signal on *every single flip*, whether or not its own content was
-    // part of that flip. One video window committing at its own frame
-    // rate was enough to wake every other window on the output at the
-    // same rate, including ones with nothing new to show — which is
-    // eager-repainting toolkits' cue to redraw anyway, turning "one
-    // video playing" into "everything on this output redraws every
-    // vblank," measured on real hardware as the compositor sustaining
-    // ~144Hz continuously instead of tracking the video's actual frame
-    // rate.
+    // This used to be gated on `frame_queued` (a real flip having just
+    // been submitted) to fix an earlier storm: every `send_frame` call
+    // was passing `|_, _| Some(output.clone())` as its
+    // `primary_scan_out_output` closure, unconditionally telling Smithay
+    // "yes, this surface's primary output is this one" for *every*
+    // surface regardless of whether it actually had anything to do with
+    // the frame that just got queued — so one video window committing
+    // was enough to wake every other window on the output at the same
+    // rate, sustaining ~144Hz continuously instead of tracking the
+    // video's actual frame rate. That got fixed below by tracking each
+    // surface's *real* primary scan-out output via Smithay's
+    // `RenderElementStates`/`surface_primary_scanout_output` instead of
+    // the hardcoded closure — a surface that wasn't actually rendered
+    // this pass no longer passes the gate, falling back to the (now
+    // meaningful) throttle instead. That fix is what actually prevents
+    // the storm, which means gating on `frame_queued` on top of it was
+    // solving an already-solved problem while introducing a new one:
     //
-    // The fix: track each surface's *real* primary scan-out output using
-    // Smithay's own `RenderElementStates` from this frame's
-    // `render_frame` result (`states`, captured above), and use the
-    // Smithay-provided `surface_primary_scanout_output` — which reads
-    // that tracked value — as the closure instead of the constant. A
-    // surface that wasn't actually rendered this frame no longer passes
-    // the gate, and falls back to the (now meaningful) throttle instead.
-    if let Some(states) = frame_queued {
+    // A client that only draws in response to its frame callback (most
+    // video players, and any toolkit pacing animation off vsync) commits
+    // a frame, gets told "go ahead, draw the next one" once that frame
+    // is displayed, draws, commits, and repeats. If the callback is only
+    // sent when *this exact render pass* found new damage, then the
+    // moment a redraw gets triggered by something else (a cursor move, a
+    // window on a different output — anything routed through
+    // `schedule_render`/`schedule_render_output`) and finds nothing new
+    // to show, that client's overdue callback never arrives — its next
+    // commit is exactly what would have produced the damage that would
+    // have sent it, so it just waits, forever, until some unrelated
+    // event happens to produce real damage and break the cycle. That's
+    // the "video stutters until I wiggle the mouse" symptom: confirmed
+    // via the `[diag]` logging above/below, which caught hundreds of
+    // consecutive no-damage renders on the video's own output — each one
+    // silently withholding the callback the video was waiting on.
+    //
+    // Sending callbacks on every successful pass, gated purely by
+    // `surface_primary_scanout_output` (a surface not actually on this
+    // output still gets nothing but the throttle), gives clients timely
+    // permission to draw without reintroducing the original storm.
+    if let Some(states) = render_states {
         let time = alice.start_time.elapsed();
         let throttle = Some(Duration::from_secs(1));
 

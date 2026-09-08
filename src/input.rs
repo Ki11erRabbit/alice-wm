@@ -39,7 +39,12 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 let serial = SERIAL_COUNTER.next_serial();
                 let pointer = self.seat.get_pointer().unwrap();
 
-                let pos = self.clamp_to_outputs(pointer.current_location() + event.delta());
+                // Captured before `pointer.motion()` moves it, so we can
+                // tell below whether the cursor actually left the output
+                // it was on — see the comment on the `schedule_render`
+                // replacement further down for why that matters.
+                let old_pos = pointer.current_location();
+                let pos = self.clamp_to_outputs(old_pos + event.delta());
                 self.follow_pointer_output_focus(pos);
 
                 let under = self.surface_under(pos);
@@ -60,7 +65,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     },
                 );
                 pointer.frame(self);
-                Backend::schedule_render(self);
+                self.schedule_render_for_cursor_move(old_pos, pos);
             }
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let output = self.space.outputs().next().unwrap();
@@ -73,6 +78,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 let serial = SERIAL_COUNTER.next_serial();
 
                 let pointer = self.seat.get_pointer().unwrap();
+                let old_pos = pointer.current_location();
 
                 let under = self.surface_under(pos);
                 if !self.locked {
@@ -92,7 +98,7 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                     },
                 );
                 pointer.frame(self);
-                Backend::schedule_render(self);
+                self.schedule_render_for_cursor_move(old_pos, pos);
             }
             InputEvent::PointerButton { event, .. } => {
                 let pointer = self.seat.get_pointer().unwrap();
@@ -224,6 +230,51 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
                 self.gesture_end(event.cancelled());
             }
             _ => {}
+        }
+    }
+
+    /// Redraws only the output(s) the software cursor actually crosses
+    /// on this motion sample, instead of every connected output.
+    ///
+    /// Both `PointerMotion` arms used to end with a blanket
+    /// `Backend::schedule_render(self)` — the "redraw every CRTC" default
+    /// (see its doc comment in `state/backend/udev.rs`) — on *every single
+    /// motion sample*. A mouse (let alone a high-poll-rate one) produces
+    /// far more of those than there are actual visual changes: the cursor
+    /// only ever needs redrawing on the output(s) it's actually on, since
+    /// we draw it ourselves as a normal render element (see `cursor.rs`)
+    /// rather than getting it from the display's hardware cursor plane.
+    /// Re-gathering and damage-checking every other monitor's whole scene
+    /// on top of that, for every one of those samples, competes for the
+    /// exact frame budget real content (a video's own commits, an
+    /// animation) needs — worse the faster the mouse and the higher the
+    /// output's refresh rate, which is exactly backwards: it means
+    /// wiggling the mouse *masks* an unrelated redraw problem by forcing
+    /// extra full-scene passes, rather than actually fixing anything, at
+    /// the cost of real competing CPU/GPU work while it's happening.
+    ///
+    /// Redrawing the *old* output too (when it differs from the new one)
+    /// isn't optional: `render_surface` always draws the cursor at the
+    /// pointer's current global position projected onto every output it
+    /// touches, so once the pointer leaves an output, that output needs
+    /// one more redraw to stop showing the cursor at its last position on
+    /// it — otherwise a monitor the mouse just left keeps a stale cursor
+    /// ghost until something else happens to redraw it.
+    fn schedule_render_for_cursor_move(
+        &mut self,
+        old_pos: smithay::utils::Point<f64, smithay::utils::Logical>,
+        new_pos: smithay::utils::Point<f64, smithay::utils::Logical>,
+    ) {
+        let new_output = self.output_under(new_pos);
+        let old_output = self.output_under(old_pos);
+
+        if let Some(output) = &new_output {
+            Backend::schedule_render_output(self, output);
+        }
+        if let Some(output) = &old_output {
+            if new_output.as_ref() != Some(output) {
+                Backend::schedule_render_output(self, output);
+            }
         }
     }
 }

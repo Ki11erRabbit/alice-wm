@@ -54,7 +54,8 @@ impl<BackendData: Backend + 'static> CompositorHandler for Alice<BackendData> {
         // setup).
         let mut root = None;
         let mut root_output = None;
-        if !is_sync_subsurface(surface) {
+        let sync_subsurface = is_sync_subsurface(surface);
+        if !sync_subsurface {
             let mut r = surface.clone();
             while let Some(parent) = get_parent(&r) {
                 r = parent;
@@ -87,13 +88,20 @@ impl<BackendData: Backend + 'static> CompositorHandler for Alice<BackendData> {
             // needs re-rendering.
             Some(output_id) => {
                 let output = self.outputs.get_id(output_id).output.clone();
+                eprintln!("[diag] commit -> schedule_render_output({:?})", output.name());
                 BackendData::schedule_render_output(self, &output);
             }
             // No associated window (a cursor surface, a not-yet-mapped
             // popup, etc.) — fall back to the old "render everything"
             // behavior; these are rare enough that the fan-out cost
             // doesn't matter.
-            None => BackendData::schedule_render(self),
+            None => {
+                eprintln!(
+                    "[diag] commit -> root_output resolution FAILED (sync_subsurface={}), falling back to schedule_render(all)",
+                    sync_subsurface
+                );
+                BackendData::schedule_render(self);
+            }
         }
     }
 }

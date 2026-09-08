@@ -588,6 +588,24 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         }
     }
 
+    /// The output whose geometry contains `pos` (global logical
+    /// coordinates), if any — same "which output are we over" lookup as
+    /// `follow_pointer_output_focus`, just returning the `Output` itself
+    /// instead of updating focus. Used by the pointer-motion handlers in
+    /// `input.rs` to redraw only the output(s) the software cursor
+    /// actually moved across, instead of every connected output.
+    pub fn output_under(&self, pos: Point<f64, Logical>) -> Option<Output> {
+        self.outputs
+            .iter()
+            .find(|info| {
+                self.space
+                    .output_geometry(&info.output)
+                    .map(|geo| geo.to_f64().contains(pos))
+                    .unwrap_or(false)
+            })
+            .map(|info| info.output.clone())
+    }
+
     /// Pass in an scope to target only that output
     pub fn relayout(&mut self, scope: Option<LayoutScope>) {
         self.relayout_impl(scope, true);
