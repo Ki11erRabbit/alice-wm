@@ -1147,6 +1147,9 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
         let Some(id) = self.window_registry.find(window.clone()) else {
             return;
         };
+        if self.window_registry.focused_id() == Some(id) {
+            return;
+        }
         self.change_focus(id, window.clone());
     }
 

@@ -211,6 +211,10 @@ impl WindowRegistry {
         }
     }
 
+    pub fn focused_id(&self) -> Option<WindowId> {
+        self.focused_window
+    }
+
     pub fn len(&self) -> usize {
         self.map.len()
     }
