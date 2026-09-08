@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use smithay::desktop::{LayerSurface as DesktopLayerSurface, layer_map_for_output};
@@ -11,6 +12,11 @@ use crate::output::{LayoutScope, OutputId};
 pub struct LayerInfo {
     pub surface: DesktopLayerSurface,
     pub init_config: bool,
+    /// See `WindowInfo::last_fractional_scale` (`window.rs`) — same cache,
+    /// same reason: without it every layer-shell surface (panels, bars)
+    /// got its surface tree walked and its fractional-scale object poked
+    /// on every single rendered frame, forever.
+    pub last_fractional_scale: Cell<Option<f64>>,
 }
 
 
@@ -39,6 +45,7 @@ impl LayerRegistry {
             .push(LayerInfo {
                 surface,
                 init_config: false,
+                last_fractional_scale: Cell::new(None),
             });
     }
 
@@ -61,4 +68,3 @@ impl LayerRegistry {
         None
     }
 }
-

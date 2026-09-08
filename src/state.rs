@@ -381,22 +381,40 @@ impl<BackendData: Backend + 'static> Alice<BackendData> {
 
         self.window_registry.iter()
             .filter(|info| info.output == output_id)
+            // Skip entirely once this window has already been told about
+            // `scale` — the overwhelmingly common case on every call after
+            // the first, since the output's real scale only changes on a
+            // mode/scale reconfiguration. Without this check, every mapped
+            // window's *entire* surface tree got walked and its
+            // fractional-scale object poked again on every single
+            // rendered frame — up to 144 times a second on this rig,
+            // continuously for as long as anything (a video) kept the
+            // output rendering — for no actual change in the value being
+            // reported. See `WindowInfo::last_fractional_scale`.
+            .filter(|info| info.last_fractional_scale.get() != Some(scale))
             .for_each(|info| {
                 info.window.with_surfaces(|_, states| {
                     smithay::wayland::fractional_scale::with_fractional_scale(states, |fractional_scale| {
                         fractional_scale.set_preferred_scale(scale);
                     });
                 });
+                info.last_fractional_scale.set(Some(scale));
             });
 
         if let Some(id) = self.outputs.get(&output.name()).map(|info| info.id) {
             if let Some(layers) = self.layer_surfaces.get(&id) {
                 for layer in layers {
+                    // Same cache, same reason, for layer-shell surfaces
+                    // (panels/bars) — see `LayerInfo::last_fractional_scale`.
+                    if layer.last_fractional_scale.get() == Some(scale) {
+                        continue;
+                    }
                     layer.surface.with_surfaces(|_, states| {
                         smithay::wayland::fractional_scale::with_fractional_scale(states, |fractional_scale| {
                             fractional_scale.set_preferred_scale(scale);
                         });
                     });
+                    layer.last_fractional_scale.set(Some(scale));
                 }
             }
         }

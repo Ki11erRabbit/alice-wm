@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use smithay::{
@@ -40,6 +41,24 @@ pub struct WindowInfo {
     /// changed, is what was flooding clients with new serials fast enough
     /// to crash them.
     pub last_configured: Option<(Rect, bool)>,
+    /// The `wp_fractional_scale` value this window's surface tree was last
+    /// actually told about, via `Alice::refresh_fractional_scale_for_output`.
+    /// `None` until the first call. `Cell` rather than a plain field since
+    /// that function only takes `&self` (it's called from deep inside the
+    /// render path alongside a live `&mut` borrow of other `Alice` fields)
+    /// but still needs to record what it just sent.
+    ///
+    /// Same idea as `last_configured` above: without this, that function
+    /// walked every window's *entire* surface tree and poked its
+    /// fractional-scale protocol object on *every single rendered frame*,
+    /// forever, for as long as anything kept the output rendering — which
+    /// a video playing does continuously. The output's real scale only
+    /// ever changes on a mode/scale reconfiguration (rare), so nearly all
+    /// of that work was pure repetition: comparing against this cached
+    /// value lets the common case (unchanged scale) skip the surface walk
+    /// and protocol call entirely instead of redoing it up to 144 times a
+    /// second.
+    pub last_fractional_scale: Cell<Option<f64>>,
 }
 
 impl WindowInfo {
@@ -56,6 +75,7 @@ impl WindowInfo {
             fullscreen: false,
             floating,
             last_configured: None,
+            last_fractional_scale: Cell::new(None),
         }
     }
 }
