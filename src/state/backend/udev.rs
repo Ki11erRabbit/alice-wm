@@ -257,6 +257,12 @@ impl Backend for UdevData {
                 state.state.process_input_event(event);
             })?;
 
+        // `CalloopData` (the `state` this closure receives) only stores
+        // `state: Alice<_>` and `display_handle` — no `LoopHandle` — so a
+        // `LoopHandle` has to be cloned in from out here (same pattern as
+        // `udev_handle` above) if `ActivateSession` below wants to schedule
+        // an idle callback.
+        let session_handle = handle.clone();
         event_loop
             .handle()
             .insert_source(notifier, move |event, &mut (), state| match event {
@@ -270,11 +276,36 @@ impl Backend for UdevData {
                     if let Err(err) = libinput_context.resume() {
                         eprintln!("Failed to resume libinput context: {:?}", err);
                     }
-                    for (_node, backend) in state.state.backend_data.backends.iter_mut() {
+                    for (&node, backend) in state.state.backend_data.backends.iter_mut() {
                         backend
                             .drm_output_manager
                             .activate(false)
                             .expect("failed to activate drm backend");
+
+                        // `activate()` above already forces smithay's own
+                        // DRM compositor to do a full re-commit next time
+                        // it's asked (via `reset_state()`/`reset_pending`
+                        // internally) — but it knows nothing about our own
+                        // `frame_pending` bookkeeping. If a frame was still
+                        // in flight when the session paused, its vblank is
+                        // never coming: the DRM device was deactivated out
+                        // from under it, so `frame_finish` (the only other
+                        // place that clears this flag) will never run for
+                        // it. Left `true`, every future `schedule_render`/
+                        // `schedule_render_output` call for that surface —
+                        // i.e. every future client commit — silently
+                        // no-ops forever (see the `DROPPED, frame already
+                        // pending` diagnostic in `schedule_render_output`).
+                        // Clear it here, and since nothing else is going to
+                        // ask this surface to redraw on its own, kick one
+                        // explicitly the same way `connector_connected`
+                        // does for a freshly added output.
+                        for (&crtc, surface) in backend.surfaces.iter_mut() {
+                            surface.frame_pending = false;
+                            session_handle.insert_idle(move |data| {
+                                render_surface(&mut data.state, node, crtc);
+                            });
+                        }
                     }
                 }
             })?;
